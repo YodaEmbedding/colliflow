@@ -1,10 +1,11 @@
 import inspect
 import json
+import multiprocessing
 import random
 import socket
 from pprint import pprint
 from queue import Queue
-from time import sleep
+from time import sleep, time
 from typing import (
     Any,
     Callable,
@@ -15,6 +16,37 @@ from typing import (
     Sequence,
     Tuple,
 )
+
+import rx
+from rx import operators as ops
+from rx.scheduler import ThreadPoolScheduler
+
+cpu_scheduler = ThreadPoolScheduler(multiprocessing.cpu_count())
+"""Thread scheduler with as many threads as CPU cores.
+
+Note that full parallel multi-core usage may not occur if there is more
+than one task that requires continuous usage of the GIL. However, if all
+CPU-bound tasks release the GIL when doing heavy computations (e.g. by
+off-loading work to external libraries such as NumPy), then CPU cores
+will be utilized to better effect. If this is not the case, one should
+use a scheduler that utilizes multiple *processes* instead of threads.
+"""
+
+io_scheduler = ThreadPoolScheduler()
+"""Thread scheduler for IO-bound tasks.
+
+The number of workers is set to the default value given by
+`concurrent.futures.ThreadPoolExecutor`, which can be found in the
+official Python documentation for your Python version.
+"""
+
+schedulers = {"cpu": cpu_scheduler, "io": io_scheduler}
+
+epoch = time()
+
+
+def get_time():
+    return time() - epoch
 
 
 class Tensor:  # pylint: disable=too-few-public-methods
@@ -58,9 +90,15 @@ class Module:
     _name_to_module: Dict[str, "Module"] = {}
     name: str = None
 
-    def __init__(self, shape: Tuple[int] = None, dtype: str = None):
+    def __init__(
+        self,
+        shape: Tuple[int] = None,
+        dtype: str = None,
+        scheduler: str = None,
+    ):
         self._shape = shape
         self._dtype = dtype
+        self._scheduler = scheduler
         self.input_nodes: List["Module"] = []
         self.output_nodes: List["Module"] = []
         self._is_used_in_static_graph = False
@@ -121,6 +159,47 @@ class Module:
         create_module = cls._name_to_module[name]
         return create_module(**module_config)
 
+    def to_rx(self, *inputs):
+        self._check_signature()
+        if len(inputs) != len(self.input_nodes):
+            raise ValueError(
+                f"Length mismatch: Expected {len(self.input_nodes)} inputs, "
+                f"actual {len(inputs)}"
+            )
+        # TODO Should 0 inputs be an error? If not, what is the observable?
+        if len(inputs) == 0:
+            raise ValueError("Requires at least one input")
+        if len(inputs) == 1:
+            observable = inputs[0].pipe(ops.map(lambda x: (x,)))
+        else:
+            observable = rx.zip(*inputs)
+        flatten = inspect.isgeneratorfunction(self.forward)
+        forward_op = ops.flat_map if flatten else ops.map
+        ops_pre = []
+        if self._scheduler is not None:
+            ops_pre.append(ops.observe_on(schedulers[self._scheduler]))
+        observable = observable.pipe(
+            *ops_pre,
+            ops.do_action(lambda xs: print(f"{get_time():.1f}  {self}{xs}")),
+            forward_op(lambda xs: self.forward(*xs)),
+            ops.publish(),
+        )
+        observable.connect()
+        return observable
+
+        # TODO QUESTION: Tensor type checks...
+        # Tensor[type] -> Tensor[type]
+        # Tensor[subtype] (covariance/contravariance)
+        # Implement whatever works and worry about static problems later?
+
+        # NOTE Define tensor as Any type since graph is deserialized anyways
+        # Let the runtime do type-checking/casting if needed
+
+        # Synchronous: forward: Sequence[Tensor] -> Tensor
+        # Generator:   forward: Sequence[Tensor] with len=0 -> Tensor
+        # Multi-output: forward: Sequence[Tensor] -> Sequence[Tensor]
+        # Observable: forward:
+
     def set_props_hook(self, *inputs: Sequence[SymbolicTensor]):
         """Override to set props like shape and dtype on symbolic call."""
 
@@ -156,16 +235,16 @@ class Module:
         return SymbolicTensor(self.shape, self.dtype, self)
 
 
-def Input(shape, dtype):  # pylint: disable=invalid-name
+def Input(shape, dtype, scheduler=None):  # pylint: disable=invalid-name
     x = SymbolicTensor(shape, dtype)
-    return InputLayer(shape, dtype)(x)
+    return InputLayer(shape, dtype, scheduler=scheduler)(x)
 
 
 class InputLayer(Module):
     name = "Input"
 
-    def __init__(self, shape, dtype):
-        super().__init__(shape, dtype)
+    def __init__(self, shape, dtype, **kwargs):
+        super().__init__(shape, dtype, **kwargs)
 
     def inner_config(self):
         return {"shape": self.shape, "dtype": self.dtype}
@@ -175,8 +254,8 @@ class InputLayer(Module):
 
 
 class Preprocessor(Module):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def inner_config(self):
         return {}
@@ -190,8 +269,8 @@ class Preprocessor(Module):
 
 
 class ClientInferenceModel(Module):
-    def __init__(self, func=None, shape=None, dtype=None):
-        super().__init__(shape, dtype)
+    def __init__(self, func=None, shape=None, dtype=None, **kwargs):
+        super().__init__(shape, dtype, **kwargs)
         self.func = func
 
     def inner_config(self):
@@ -203,8 +282,8 @@ class ClientInferenceModel(Module):
 
 
 class ServerInferenceModel(Module):
-    def __init__(self, func=None, shape=None, dtype=None):
-        super().__init__(shape, dtype)
+    def __init__(self, func=None, shape=None, dtype=None, **kwargs):
+        super().__init__(shape, dtype, **kwargs)
         self.func = func
 
     def inner_config(self):
@@ -216,8 +295,8 @@ class ServerInferenceModel(Module):
 
 
 class Postencoder(Module):
-    def __init__(self):
-        super().__init__((None,), "uint8")
+    def __init__(self, **kwargs):
+        super().__init__((None,), "uint8", **kwargs)
 
     def inner_config(self):
         return {}
@@ -227,8 +306,8 @@ class Postencoder(Module):
 
 
 class Predecoder(Module):
-    def __init__(self, shape, dtype):
-        super().__init__(shape, dtype)
+    def __init__(self, shape, dtype, **kwargs):
+        super().__init__(shape, dtype, **kwargs)
 
     def inner_config(self):
         return {"shape": self.shape, "dtype": self.dtype}
@@ -250,8 +329,8 @@ class Predecoder(Module):
 
 
 class TcpClient(Module):
-    def __init__(self, hostname=None, port=None):
-        super().__init__((None,), "uint8")
+    def __init__(self, hostname=None, port=None, **kwargs):
+        super().__init__((None,), "uint8", **kwargs)
         self.hostname = hostname
         self.port = port
 
@@ -266,8 +345,8 @@ class TcpClient(Module):
 #     # so... this should what? keep a bind listener open? then wait for input?
 #     # input should be in a "streaming" tensor format...! (byte header/etc)
 #
-#     def __init__(self, hostname=None, port=None):
-#         super().__init__((None,), "uint8")
+#     def __init__(self, hostname=None, port=None, **kwargs):
+#         super().__init__((None,), "uint8", **kwargs)
 #         self.hostname = hostname
 #         self.port = port
 #         # wait... what about "async" server that we wrote? nevermind that?
@@ -323,6 +402,10 @@ class Model:
         rows = [_fmt(m, d) for m, d in self._serialize_pairs()]
         left_col = max(len(p) for p, _ in rows)
         return "\n".join(f"{p:{left_col}}  {m}" for p, m in rows)
+
+    def to_rx(self, *inputs: Sequence[rx.Observable]) -> List[rx.Observable]:
+        func = lambda module, xs: module.to_rx(*xs)
+        return self._forward_graph(inputs, func)
 
     def serialize(self) -> str:
         """Serialize model to JSON."""
@@ -571,8 +654,8 @@ def simple_model():
 
 
 class RandomMerge(Module):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def inner_config(self):
         return {}
@@ -586,27 +669,28 @@ class RandomMerge(Module):
         self._shape = left.shape
         self._dtype = left.dtype
 
+
 def multi_branch_model():
     client_func = lambda x: Tensor(shape=(14, 14, 512), dtype="uint8")
     server_func = lambda x: Tensor(shape=(1000,), dtype="float32")
 
-    inputs = [Input(shape=(224, 224, 3), dtype="uint8")]
+    inputs = [Input(shape=(224, 224, 3), dtype="uint8", scheduler="io")]
     a = inputs[0]
 
-    x = Postencoder()(a)
+    x = Postencoder(scheduler="cpu")(a)
     x = Predecoder(shape=(224, 224, 3), dtype="uint8")(x)
     b = x
     c = RandomMerge()(a, b)
     c = RandomMerge()(c, c)
 
-    x = Preprocessor()(c)
+    x = Preprocessor(scheduler="cpu")(c)
     x = ClientInferenceModel(
-        func=client_func, shape=(14, 14, 512), dtype="uint8"
+        func=client_func, shape=(14, 14, 512), dtype="uint8", scheduler="cpu"
     )(x)
     x = Postencoder()(x)
     x = Predecoder(shape=(14, 14, 512), dtype="uint8")(x)
     x = ServerInferenceModel(  #
-        func=server_func, shape=(1000,), dtype="float32"
+        func=server_func, shape=(1000,), dtype="float32", scheduler="cpu"
     )(x)
 
     # outputs = [x, a, b, c]
@@ -686,8 +770,49 @@ def main():
     # server_executor = Executor(model=model_server)
 
 
+def main_rx():
+    frames = rx.interval(1).pipe(
+        ops.do_action(lambda x: print(f"\n{get_time():.1f}  Frame {x}\n")),
+        ops.map(lambda x: Tensor((224, 224, 3), "uint8")),
+        ops.publish(),
+    )
+    model = simple_model()
+    model = multi_branch_model()
+    print(model)
+
+    # preds = model(Tensor((224, 224, 3), "uint8"))
+    # print(preds)
+
+    observables = model.to_rx(frames)
+    observable = observables[0]
+    observable.subscribe(lambda x: print(f"{get_time():.1f}  Result"))
+
+    frames.connect()
+    sleep(10)
+
+    # TODO
+    # buffer_size, drop=True, etc
+    # backpressure
+    # time slice scheduling
+    # scheduler messaging
+    # tcp messaging
+    # tcp client/server
+    # ordering: "tensor indexes" (e.g. tcp "enforces" order; udp order lost tensors)
+    # ...
+
+    # NOTE
+    # predictive early-dropping frames + scheduling matters for low-latency
+    # ...not really for high-throughput only, though
+
+    # TEST
+    # multicasting
+    # various architectures, fuzzy timings/delays
+    # verify computation completes, no deadlocks, ...
+
+
 if __name__ == "__main__":
-    main()
+    # main()
+    main_rx()
 
 
 # TODO flow of actual data...? ehhhh
