@@ -74,16 +74,48 @@ class SymbolicTensor(Tensor):  # pylint: disable=too-few-public-methods
         return f"SymbolicTensor({s})"
 
 
+def _forward_unimplemented(self, *inputs: Any) -> Any:
+    """
+    `forward` is not provided as a regular function in the `Module`
+    class to ensure that type-checkers and linters (e.g. mypy and
+    pylint) don't raise warnings when a deriving class provides a
+    `forward` method that accepts a fixed number of arguments, instead
+    of the varargs suggested by this signature. This technique bypasses
+    the contravariance and Liskov substitutability checks, as described
+    in the following issues:
+
+     - https://github.com/python/mypy/issues/8795
+     - https://github.com/pytorch/pytorch/issues/35566
+    """
+    # pass  # pylint: disable=unnecessary-pass
+    raise NotImplementedError
+
+
+def _set_props_hook_unimplemented(
+    self, *inputs: SymbolicTensor  # pylint: disable=unused-argument
+):
+    """
+    `set_props_hook` is not provided as a regular function in the
+    `Module` class for the same reasons as `forward`.
+    """
+
+
 class Module:
     """Defines a node in the collaborative intelligence graph.
 
     Inheriting classes must:
 
-    1. Override `forward` for execution.
-    2. Override `inner_config` for serialization.
-    3. Either override `dtype`, and `shape` or set their backing fields,
+    1. Call __init__.
+    2. Override `forward` for execution.
+    3. Override `inner_config` for serialization.
+    4. Either override `dtype`, and `shape` or set their backing fields,
        `_dtype`, and `_shape` for serialization.
-    4. Set `name` to a unique identifier for the class.
+    5. Set `name` to a unique identifier for the class.
+
+    Optionally:
+
+    6. Override `set_props_hook` in order to set `_dtype` or `_shape`
+       during a symbolic tensor call.
     """
 
     _registered_modules: List["Module"] = []
@@ -146,11 +178,14 @@ class Module:
             "config": self.inner_config(),
         }
 
-    def forward(self, *inputs) -> Any:
-        raise NotImplementedError
-
     def inner_config(self) -> Dict[str, Any]:
         raise NotImplementedError
+
+    forward: Callable[..., Any] = _forward_unimplemented
+    """Override to define this module's core functionality."""
+
+    set_props_hook: Callable[..., Any] = _set_props_hook_unimplemented
+    """Override to set props like shape and dtype on symbolic call."""
 
     @classmethod
     def from_config(cls, node_config: Dict[str, Any]) -> "Module":
@@ -200,9 +235,6 @@ class Module:
         # Multi-output: forward: Sequence[Tensor] -> Sequence[Tensor]
         # Observable: forward:
 
-    def set_props_hook(self, *inputs: Sequence[SymbolicTensor]):
-        """Override to set props like shape and dtype on symbolic call."""
-
     def _check_signature(self):
         n_input_nodes = len(self.input_nodes)
         n_input_forward = len(inspect.signature(self.forward).parameters)
@@ -249,7 +281,7 @@ class InputLayer(Module):
     def inner_config(self):
         return {"shape": self.shape, "dtype": self.dtype}
 
-    def forward(self, tensor: Tensor):  # pylint: disable=arguments-differ
+    def forward(self, tensor: Tensor):
         return tensor
 
 
@@ -260,10 +292,10 @@ class Preprocessor(Module):
     def inner_config(self):
         return {}
 
-    def forward(self, tensor: Tensor):  # pylint: disable=arguments-differ
+    def forward(self, tensor: Tensor):
         return tensor
 
-    def set_props_hook(self, tensor):  # pylint: disable=arguments-differ
+    def set_props_hook(self, tensor: SymbolicTensor):
         self._shape = tensor.shape
         self._dtype = tensor.dtype
 
@@ -276,7 +308,7 @@ class ClientInferenceModel(Module):
     def inner_config(self):
         return {"shape": self.shape, "dtype": self.dtype}
 
-    def forward(self, tensor: Tensor):  # pylint: disable=arguments-differ
+    def forward(self, tensor: Tensor):
         sleep(0.7)
         return self.func(tensor)
 
@@ -289,7 +321,7 @@ class ServerInferenceModel(Module):
     def inner_config(self):
         return {"shape": self.shape, "dtype": self.dtype}
 
-    def forward(self, tensor: Tensor):  # pylint: disable=arguments-differ
+    def forward(self, tensor: Tensor):
         sleep(0.5)
         return self.func(tensor)
 
@@ -301,7 +333,7 @@ class Postencoder(Module):
     def inner_config(self):
         return {}
 
-    def forward(self, tensor: Tensor):  # pylint: disable=arguments-differ
+    def forward(self, tensor: Tensor):
         return tensor
 
 
@@ -312,7 +344,7 @@ class Predecoder(Module):
     def inner_config(self):
         return {"shape": self.shape, "dtype": self.dtype}
 
-    def forward(self, tensor: Tensor):  # pylint: disable=arguments-differ
+    def forward(self, tensor: Tensor):
         return tensor
 
 
@@ -324,7 +356,7 @@ class Predecoder(Module):
 #     def inner_config(self):
 #         return {}
 #
-#     def forward(self, tensor: Tensor):  # pylint: disable=arguments-differ
+#     def forward(self, tensor: Tensor):
 #         return Tensor(self.shape, self.dtype)
 
 
@@ -337,7 +369,7 @@ class TcpClient(Module):
     def inner_config(self):
         return {}
 
-    def forward(self, tensor: Tensor):  # pylint: disable=arguments-differ
+    def forward(self, tensor: Tensor):
         return tensor
 
 
@@ -377,7 +409,7 @@ class TcpClient(Module):
 #     def inner_config(self):
 #         return {}
 #
-#     def forward(self, tensor: Tensor):  # pylint: disable=arguments-differ
+#     def forward(self, tensor: Tensor):
 #         return tensor
 
 
@@ -663,7 +695,7 @@ class RandomMerge(Module):
     def forward(self, left: Tensor, right: Tensor):
         return left if random.random() < 0.5 else right
 
-    def set_props_hook(self, left: Tensor, right: Tensor):
+    def set_props_hook(self, left: SymbolicTensor, right: SymbolicTensor):
         assert left.shape == right.shape
         assert left.dtype == right.dtype
         self._shape = left.shape
