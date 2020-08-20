@@ -676,17 +676,17 @@ def simple_model():
     client_func = lambda x: Tensor(shape=(14, 14, 512), dtype="uint8")
     server_func = lambda x: Tensor(shape=(1000,), dtype="float32")
 
-    inputs = [Input(shape=(224, 224, 3), dtype="uint8")]
+    inputs = [Input(shape=(224, 224, 3), dtype="uint8", scheduler="io")]
 
     x = inputs[0]
-    x = Preprocessor()(x)
+    x = Preprocessor(scheduler="cpu")(x)
     x = ClientInferenceModel(
-        func=client_func, shape=(14, 14, 512), dtype="uint8"
+        func=client_func, shape=(14, 14, 512), dtype="uint8", scheduler="cpu"
     )(x)
-    x = Postencoder()(x)
-    x = Predecoder(shape=(14, 14, 512), dtype="uint8")(x)
+    x = Postencoder(scheduler="cpu")(x)
+    x = Predecoder(shape=(14, 14, 512), dtype="uint8", scheduler="cpu")(x)
     x = ServerInferenceModel(  #
-        func=server_func, shape=(1000,), dtype="float32"
+        func=server_func, shape=(1000,), dtype="float32", scheduler="cpu"
     )(x)
 
     outputs = [x]
@@ -818,7 +818,6 @@ def main_rx():
         ops.publish(),
     )
     model = simple_model()
-    model = multi_branch_model()
     print(model)
 
     # preds = model(Tensor((224, 224, 3), "uint8"))
