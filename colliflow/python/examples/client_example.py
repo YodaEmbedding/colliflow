@@ -13,8 +13,12 @@ from typing import (
     Iterable,
     Iterator,
     List,
+    Optional,
     Sequence,
+    Set,
     Tuple,
+    Type,
+    cast,
 )
 
 import rx
@@ -118,9 +122,9 @@ class Module:
        during a symbolic tensor call.
     """
 
-    _registered_modules: List["Module"] = []
-    _name_to_module: Dict[str, "Module"] = {}
-    name: str = None
+    _registered_modules: List[Type["Module"]] = []
+    _name_to_module: Dict[str, Type["Module"]] = {}
+    name: Optional[str] = None
 
     def __init__(
         self,
@@ -142,10 +146,11 @@ class Module:
         cls._name_to_module[cls.name] = cls
         super().__init_subclass__(**kwargs)
 
-    def __call__(self, *inputs):
+    def __call__(self, *inputs: Tensor):
         is_syms = [isinstance(tensor, SymbolicTensor) for tensor in inputs]
 
         if all(is_syms):
+            inputs = cast(Tuple[SymbolicTensor, ...], inputs)
             return self._forward_symbolic(*inputs)
 
         if any(is_syms):
@@ -163,10 +168,14 @@ class Module:
 
     @property
     def dtype(self) -> str:
+        if self._dtype is None:
+            raise ValueError("Please initialize dtype property")
         return self._dtype
 
     @property
     def shape(self) -> Tuple[int]:
+        if self._shape is None:
+            raise ValueError("Please initialize shape property")
         return self._shape
 
     def config(self, node_lut):
@@ -244,9 +253,7 @@ class Module:
                 f"but module only has {n_input_nodes} input nodes"
             )
 
-    def _forward_symbolic(
-        self, *inputs: Sequence[SymbolicTensor]
-    ) -> SymbolicTensor:
+    def _forward_symbolic(self, *inputs: SymbolicTensor) -> SymbolicTensor:
         if self._is_used_in_static_graph:
             raise RuntimeError(
                 "Cannot reuse a module instance more than once in a static "
@@ -421,7 +428,7 @@ class Model:
         self._outputs = outputs
         self.modules = list(self._compute_order())
 
-    def __call__(self, *inputs: Sequence[Tensor]) -> Sequence[Tensor]:
+    def __call__(self, *inputs: Tensor) -> Sequence[Tensor]:
         return self._predict(*inputs)
 
     def __repr__(self) -> str:
@@ -435,7 +442,7 @@ class Model:
         left_col = max(len(p) for p, _ in rows)
         return "\n".join(f"{p:{left_col}}  {m}" for p, m in rows)
 
-    def to_rx(self, *inputs: Sequence[rx.Observable]) -> List[rx.Observable]:
+    def to_rx(self, *inputs: rx.Observable) -> List[rx.Observable]:
         func = lambda module, xs: module.to_rx(*xs)
         return self._forward_graph(inputs, func)
 
@@ -457,7 +464,7 @@ class Model:
         """Deserialize model from JSON-serializable structure."""
         model_inputs = []
         model_outputs = []
-        outputs = {}
+        outputs: Dict[int, SymbolicTensor] = {}
         fringe = _Fringe()
         discovered = set()
 
@@ -502,7 +509,7 @@ class Model:
 
         return Model(inputs=model_inputs, outputs=model_outputs)
 
-    def _compute_order(self) -> Iterable[Module]:
+    def _compute_order(self) -> Iterator[Module]:
         visited = set()
         input_nodes = {x.parent for x in self._inputs}
         for output in self._outputs:
@@ -513,13 +520,13 @@ class Model:
                 visited.add(node)
                 yield node
 
-    def _flatten_graph(self) -> Iterable[Module]:
-        node_set = set()
+    def _flatten_graph(self) -> Iterator[Module]:
+        node_set: Set[Module] = set()
         for x in self._inputs:
             input_module = x.parent
             yield from self._flatten(input_module, node_set)
 
-    def _predict(self, *inputs: Sequence[Tensor]) -> List[Tensor]:
+    def _predict(self, *inputs: Tensor) -> List[Tensor]:
         apply_module = lambda module, xs: module(*xs)
         return self._forward_graph(inputs, apply_module)
 
@@ -565,7 +572,7 @@ class Model:
         return ((node, node.config(node_lut)) for node in node_lut)
 
     @classmethod
-    def _flatten(cls, node, nodes):
+    def _flatten(cls, node: Module, nodes: Set[Module]) -> Iterator[Module]:
         """Visits all nodes in graph."""
         if node is None or node in nodes:
             return
@@ -575,7 +582,9 @@ class Model:
             yield from cls._flatten(x, nodes)
 
     @classmethod
-    def _output_visiting_order(cls, output_node, input_nodes):
+    def _output_visiting_order(
+        cls, output_node: Module, input_nodes: Iterable[Module]
+    ) -> Iterator[Module]:
         """Yields node computation order for output node.
 
         This is done via post-order DFS traversal over the inverted tree.
