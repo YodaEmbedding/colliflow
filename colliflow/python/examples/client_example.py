@@ -830,7 +830,17 @@ def main_rx():
     frames.connect()
     sleep(10)
 
+    # TODO custom Request(1) graph?
+    # When should "output" TCP node send Request(1) notification?
+    # When it (thinks) that the receiver has received all data.
+
+    # "Publish" makes everything a hot observable.
+    # I assume that when .onNext() is called on a Subject, it multicasts to all
+    # observers "immediately". If the observer is not ready, it probably pushes
+    # it into some buffer of the subscriber.
+
     # TODO
+    # IndexedTensor
     # buffer_size, drop=True, etc
     # backpressure
     # time slice scheduling
