@@ -1,4 +1,6 @@
+import asyncio
 import random
+from asyncio import StreamReader, StreamWriter
 from pprint import pprint
 from time import sleep, time
 
@@ -12,6 +14,10 @@ from colliflow import (
     SymbolicTensor,
     Tensor,
 )
+from .shared_modules import *
+
+IP = "127.0.0.1"
+PORT = 5678
 
 epoch = time()
 
@@ -20,139 +26,33 @@ def get_time():
     return time() - epoch
 
 
-class Preprocessor(Module):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-    def inner_config(self):
-        return {}
-
-    def forward(self, tensor: Tensor):
-        return tensor
-
-    def set_props_hook(self, tensor: SymbolicTensor):
-        self._shape = tensor.shape
-        self._dtype = tensor.dtype
-
-
-class ClientInferenceModel(Module):
-    def __init__(self, func=None, shape=None, dtype=None, **kwargs):
-        super().__init__(shape, dtype, **kwargs)
-        self.func = func
-
-    def inner_config(self):
-        return {"shape": self.shape, "dtype": self.dtype}
-
-    def forward(self, tensor: Tensor):
-        sleep(0.7)
-        return self.func(tensor)
-
-
-class ServerInferenceModel(Module):
-    def __init__(self, func=None, shape=None, dtype=None, **kwargs):
-        super().__init__(shape, dtype, **kwargs)
-        self.func = func
-
-    def inner_config(self):
-        return {"shape": self.shape, "dtype": self.dtype}
-
-    def forward(self, tensor: Tensor):
-        sleep(0.5)
-        return self.func(tensor)
-
-
-class Postencoder(Module):
-    def __init__(self, **kwargs):
-        super().__init__((None,), "uint8", **kwargs)
-
-    def inner_config(self):
-        return {}
-
-    def forward(self, tensor: Tensor):
-        return tensor
-
-
-class Predecoder(Module):
-    def __init__(self, shape, dtype, **kwargs):
-        super().__init__(shape, dtype, **kwargs)
-
-    def inner_config(self):
-        return {"shape": self.shape, "dtype": self.dtype}
-
-    def forward(self, tensor: Tensor):
-        return tensor
-
-
-# Not really needed since Postencoder already converts to uint8
-# class TcpSender(Module):
-#     def __init__(self):
-#         super().__init__((None,), "uint8")
-#
-#     def inner_config(self):
-#         return {}
-#
-#     def forward(self, tensor: Tensor):
-#         return Tensor(self.shape, self.dtype)
-
-
-class TcpClient(Module):
-    def __init__(self, hostname=None, port=None, **kwargs):
-        super().__init__((None,), "uint8", **kwargs)
-        self.hostname = hostname
-        self.port = port
-
-    def inner_config(self):
-        return {}
-
-    def forward(self, tensor: Tensor):
-        return tensor
-
-
-# class TcpServer(Module):
-#     # so... this should what? keep a bind listener open? then wait for input?
-#     # input should be in a "streaming" tensor format...! (byte header/etc)
-#
-#     def __init__(self, hostname=None, port=None, **kwargs):
-#         super().__init__((None,), "uint8", **kwargs)
-#         self.hostname = hostname
-#         self.port = port
-#         # wait... what about "async" server that we wrote? nevermind that?
-#         # that's useful for multiclient architecture... but forget that for now
-#
-#         # perhaps pass a prepared socket in? is that what the executor's job is?
-#         # Meh... actually, it's fine to do this I think but not IMMEDIATELY?
-#         # only when model is "initialized" properly, and we send a start signal
-#         # to all modules for any initialization code?
-#
-#
-#         # does this module really need an "input"? or can it be a "producer"
-#         # node (e.g. like InputLayer)
-#
-#         # also, this is all running in a separate thread...
-#         # OH SO THATS WHAT EXECUTOR DOES! MANAGE THREADS! and pools!
-#
-#         # Design all these things on Surface...
-#
-#         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-#         self.sock.bind((hostname, port))
-#         self.sock.listen(1)
-#         # self.conn, self.addr = self.sock.accept()
-#         # self.conn.recv()
-#
-#         # TODO
-#
-#     def inner_config(self):
-#         return {}
-#
-#     def forward(self, tensor: Tensor):
-#         return tensor
-
-
 def simple_model():
     client_func = lambda x: Tensor(shape=(14, 14, 512), dtype="uint8")
     server_func = lambda x: Tensor(shape=(1000,), dtype="float32")
 
     inputs = [Input(shape=(224, 224, 3), dtype="uint8", scheduler="io")]
+
+    x = inputs[0]
+    x = Preprocessor(scheduler="cpu")(x)
+    x = ClientInferenceModel(
+        func=client_func, shape=(14, 14, 512), dtype="uint8", scheduler="cpu"
+    )(x)
+    x = Postencoder(scheduler="cpu")(x)
+    x = Predecoder(shape=(14, 14, 512), dtype="uint8", scheduler="cpu")(x)
+    x = ServerInferenceModel(  #
+        func=server_func, shape=(1000,), dtype="float32", scheduler="cpu"
+    )(x)
+
+    outputs = [x]
+
+    return Model(inputs=inputs, outputs=outputs)
+
+
+def server_model():
+    client_func = lambda x: Tensor(shape=(14, 14, 512), dtype="uint8")
+    server_func = lambda x: Tensor(shape=(1000,), dtype="float32")
+
+    inputs = [FakeInput(shape=(224, 224, 3), dtype="uint8", scheduler="io")]
 
     x = inputs[0]
     x = Preprocessor(scheduler="cpu")(x)
@@ -336,9 +236,33 @@ def main_rx():
     # verify computation completes, no deadlocks, ...
 
 
+async def tcp_echo_client(message):
+    reader: StreamReader
+    writer: StreamWriter
+    reader, writer = await asyncio.open_connection(IP, PORT)
+
+    print(f"Send: {message!r}")
+    writer.write(message.encode())
+    await writer.drain()
+
+    # data = await reader.read(100)
+    # print(f'Received: {data.decode()!r}')
+
+    print("Close the connection")
+    writer.close()
+    await writer.wait_closed()
+
+
+def main_tcp():
+    model = server_model()
+    model_config = model.serialize()
+    asyncio.run(tcp_echo_client(model_config))
+
+
 if __name__ == "__main__":
     # main()
-    main_rx()
+    # main_rx()
+    main_tcp()
 
 
 # TODO flow of actual data...? ehhhh
