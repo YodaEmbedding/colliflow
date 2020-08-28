@@ -1,4 +1,5 @@
 from .model import *
-from .modules import Input, Module
+from .modules.input import Input
+from .modules.module import *
 from .schedulers import *
 from .tensors import *

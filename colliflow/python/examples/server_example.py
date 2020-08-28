@@ -2,6 +2,7 @@ import asyncio
 from asyncio import StreamReader, StreamWriter
 
 from colliflow import Model
+
 from .shared_modules import *
 
 IP = "0.0.0.0"
@@ -17,7 +18,7 @@ async def client_handler(reader: StreamReader, writer: StreamWriter):
     line = await reader.readline()
     # if len(line) == 0:
     #     break
-    submodel = Model.deserialize(line)
+    submodel = model_from_config(line.decode())
     print(submodel)
 
     # TODO what does to_rx mean? No inputs? or outputs?
@@ -27,11 +28,12 @@ async def client_handler(reader: StreamReader, writer: StreamWriter):
     # 2. Duplex UDP
     # 3. UDP in, TCP out
 
-    # observable = submodel.to_rx()
-    #
-    # TODO what do we subscribe on? asyncio_scheduler? does it matter?
-    # observable.subscribe()
-    # print("subscribed")
+    observables = submodel.to_rx([])
+    observable = observables[0]
+
+    # TODO subscribe on? asyncio_scheduler? NewThreadScheduler? does it matter?
+    observable.subscribe()
+    print("subscribed")
 
 
 async def main():

@@ -1,4 +1,5 @@
 import json
+from collections import abc
 from queue import Queue
 from typing import (
     Any,
@@ -10,15 +11,36 @@ from typing import (
     Sequence,
     Set,
     Tuple,
+    Type,
+    TypeVar,
+    Union,
 )
 
 import rx
 
-from colliflow.modules import InputLayer, Module
+from colliflow.modules import InputLayer, InputModule, Module
 from colliflow.tensors import SymbolicTensor, Tensor
+
+T = TypeVar("T")
+MaybeSequence = Union[T, Sequence[T]]
+JsonDict = Dict[str, Any]
+
+
+def _coerce_sequence_type(x: MaybeSequence[T], t: Type[T]) -> Sequence[T]:
+    if isinstance(x, t):
+        return (x,)
+    if isinstance(x, abc.Sequence) and all(isinstance(y, t) for y in x):
+        return x
+    raise TypeError(
+        f"Cannot coerce type {type(x).__name__} to Sequence[{t.__name__}]."
+    )
 
 
 class Model:
+    modules: List[Module]
+    _inputs: List[SymbolicTensor]
+    _outputs: List[SymbolicTensor]
+
     def __init__(
         self, *, inputs: List[SymbolicTensor], outputs: List[SymbolicTensor]
     ):
@@ -26,8 +48,9 @@ class Model:
         self._outputs = outputs
         self.modules = list(self._compute_order())
 
-    def __call__(self, *inputs: Tensor) -> Sequence[Tensor]:
-        return self._predict(*inputs)
+    def __call__(self, *inputs: MaybeSequence[Tensor]) -> Sequence[Tensor]:
+        xs = [_coerce_sequence_type(x, Tensor) for x in inputs]
+        return self._predict(*xs)
 
     def __repr__(self) -> str:
         def _fmt(module, d):
@@ -40,25 +63,28 @@ class Model:
         left_col = max(len(p) for p, _ in rows)
         return "\n".join(f"{p:{left_col}}  {m}" for p, m in rows)
 
-    def to_rx(self, *inputs: rx.Observable) -> List[rx.Observable]:
+    def to_rx(
+        self, *inputs: MaybeSequence[rx.Observable]
+    ) -> List[rx.Observable]:
         func = lambda module, xs: module.to_rx(*xs)
-        return self._forward_graph(inputs, func)
+        xs = [_coerce_sequence_type(x, rx.Observable) for x in inputs]
+        return self._forward_graph(xs, func)
 
     def serialize(self) -> str:
-        """Serialize model to JSON."""
+        """Serialize model to JSON-formatted string."""
         return json.dumps(self.serialize_dict())
 
-    def serialize_dict(self) -> List[Dict[str, Any]]:
+    def serialize_dict(self) -> List[JsonDict]:
         """Serialize model to JSON-serializable structure."""
         return [d for _, d in self._serialize_pairs()]
 
     @classmethod
     def deserialize(cls, model_config: str) -> "Model":
-        """Deserialize model from JSON."""
+        """Deserialize model from JSON-formatted string."""
         return cls.deserialize_dict(json.loads(model_config))
 
     @staticmethod
-    def deserialize_dict(model_config: List[Dict[str, Any]]) -> "Model":
+    def deserialize_dict(model_config: List[JsonDict]) -> "Model":
         """Deserialize model from JSON-serializable structure."""
         model_inputs = []
         model_outputs = []
@@ -67,7 +93,8 @@ class Model:
         discovered = set()
 
         for node_cfg in model_config:
-            if node_cfg["name"] == InputLayer.name:
+            module_type = Module.name_to_module[node_cfg["name"]]
+            if issubclass(module_type, InputModule):
                 node_id = node_cfg["id"]
                 fringe.put(node_id)
                 discovered.add(node_id)
@@ -77,7 +104,8 @@ class Model:
         while not fringe.empty():
             node_id = fringe.get()
             node_cfg = node_configs[node_id]
-            is_input = node_cfg["name"] == InputLayer.name
+            module_type = Module.name_to_module[node_cfg["name"]]
+            is_input = issubclass(module_type, InputModule)
             is_output = len(node_cfg["outputs"]) == 0
             ready = is_input or all(x in outputs for x in node_cfg["inputs"])
 
@@ -87,11 +115,16 @@ class Model:
 
             module = Module.from_config(node_cfg)
             inputs = (
-                [SymbolicTensor(module.shape, module.dtype)]
+                [SymbolicTensor(s, d) for s, d in node_cfg["tensor_inputs"]]
                 if is_input
                 else [outputs[x] for x in node_cfg["inputs"]]
             )
-            outputs[node_id] = module(*inputs)
+            try:
+                outputs[node_id] = module(*inputs)
+            except Exception as e:
+                raise Exception(
+                    f"{module} could not be called with the inputs {inputs}."
+                ) from e
 
             for nid in node_cfg["outputs"]:
                 if nid in discovered:
@@ -124,21 +157,24 @@ class Model:
             input_module = x.parent
             yield from self._flatten(input_module, node_set)
 
-    def _predict(self, *inputs: Tensor) -> List[Tensor]:
+    def _predict(self, *inputs: Sequence[Tensor]) -> List[Tensor]:
         apply_module = lambda module, xs: module(*xs)
         return self._forward_graph(inputs, apply_module)
 
     def _forward_graph(
         self,
-        inputs: Sequence[Any],
-        func: Callable[[Module, Sequence[Any]], Any],
-    ) -> List[Any]:
+        inputs: Sequence[Sequence[T]],
+        func: Callable[[Module, Sequence[T]], T],
+    ) -> List[T]:
         """Run forwards through the graph, applying given func."""
         if len(inputs) != len(self._inputs):
-            raise ValueError("Wrong number of inputs provided")
+            raise ValueError(
+                f"Wrong number of inputs provided: "
+                f"expected {len(self._inputs)}, actual {len(inputs)}."
+            )
 
-        input_nodes = [x.parent for x in self._inputs]
-        outputs = dict(zip(input_nodes, inputs))
+        input_nodes: List[Module] = [x.parent for x in self._inputs]
+        outputs = {n: func(n, xs) for n, xs in zip(input_nodes, inputs)}
         remaining = set(self.modules) - set(input_nodes)
         output_parents = [x.parent for x in self._outputs]
 
@@ -146,8 +182,8 @@ class Model:
             if module in input_nodes:
                 continue
 
-            inputs = [outputs[x] for x in module.input_nodes]
-            outputs[module] = func(module, inputs)
+            xs = [outputs[x] for x in module.input_nodes]
+            outputs[module] = func(module, xs)
             remaining.remove(module)
 
             # Release reference to stored output if it is no longer needed
@@ -161,7 +197,7 @@ class Model:
 
     def _serialize_pairs(
         self, skip_unneeded: bool = True
-    ) -> Iterator[Tuple[Module, Dict[str, Any]]]:
+    ) -> Iterator[Tuple[Module, JsonDict]]:
         nodes = self._flatten_graph()
         if skip_unneeded:
             valid = set(self.modules)

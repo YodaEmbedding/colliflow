@@ -1,17 +1,21 @@
+from typing import Tuple
+
 from colliflow.tensors import SymbolicTensor, Tensor
 
-from .module import Module
+from .module import InputModule
 
 
-def Input(shape, dtype, scheduler=None):  # pylint: disable=invalid-name
+def Input(
+    shape: Tuple[int], dtype: str, scheduler=None
+):  # pylint: disable=invalid-name
     x = SymbolicTensor(shape, dtype)
     return InputLayer(shape, dtype, scheduler=scheduler)(x)
 
 
-class InputLayer(Module):
+class InputLayer(InputModule):
     name = "Input"
 
-    def __init__(self, shape, dtype, **kwargs):
+    def __init__(self, shape: Tuple[int], dtype: str, **kwargs):
         super().__init__(shape, dtype, **kwargs)
 
     def inner_config(self):

@@ -8,6 +8,8 @@ from rx import operators as ops
 from colliflow.schedulers import schedulers
 from colliflow.tensors import SymbolicTensor, Tensor
 
+JsonDict = Dict[str, Any]
+
 epoch = time()
 
 
@@ -46,12 +48,12 @@ class Module:
 
     Inheriting classes must:
 
-    1. Call __init__.
-    2. Override `forward` for execution.
-    3. Override `inner_config` for serialization.
-    4. Either override `dtype`, and `shape` or set their backing fields,
+    1. Call `__init__`.
+    2. Override `inner_config` for serialization.
+    3. Either override `dtype`, and `shape` or set their backing fields,
        `_dtype`, and `_shape` for serialization.
-    5. Set `name` to a unique identifier for the class.
+    4. Set `name` to a unique identifier for the class.
+    5. Override `forward` for execution.
 
     Optionally:
 
@@ -59,8 +61,8 @@ class Module:
        during a symbolic tensor call.
     """
 
-    _registered_modules: List[Type["Module"]] = []
-    _name_to_module: Dict[str, Type["Module"]] = {}
+    registered_modules: List[Type["Module"]] = []
+    name_to_module: Dict[str, Type["Module"]] = {}
     name: Optional[str] = None
 
     def __init__(
@@ -74,26 +76,42 @@ class Module:
         self._scheduler = scheduler
         self.input_nodes: List["Module"] = []
         self.output_nodes: List["Module"] = []
+        self.input_tensors: List[SymbolicTensor] = []
         self._is_used_in_static_graph = False
 
     def __init_subclass__(cls, **kwargs):
+        if cls.name == "__AbstractModule":
+            cls.name = None
+            super().__init_subclass__(**kwargs)
+            return
         if cls.name is None:
             cls.name = cls.__name__
-        cls._registered_modules.append(cls)
-        cls._name_to_module[cls.name] = cls
+        cls.registered_modules.append(cls)
+        cls.name_to_module[cls.name] = cls
         super().__init_subclass__(**kwargs)
 
-    def __call__(self, *inputs: Tensor):
+    def __call__(self, *inputs: Tensor, force_eval: bool = False):
+        n_input = len(inputs)
+        n_input_forward = self._num_forward_params()
+        if n_input != n_input_forward:
+            raise ValueError(
+                f"Length mismatch: expected {n_input_forward} inputs, "
+                f"actual {n_input}."
+            )
+
         is_syms = [isinstance(tensor, SymbolicTensor) for tensor in inputs]
 
-        if all(is_syms):
+        if any(is_syms) and not all(is_syms):
+            raise NotImplementedError(
+                "Mixed symbolic and non-symbolic tensors are not supported."
+            )
+
+        if all(is_syms) and not force_eval:
             inputs = cast(Tuple[SymbolicTensor, ...], inputs)
             return self._forward_symbolic(*inputs)
 
         if any(is_syms):
-            raise NotImplementedError(
-                "Mixed symbolic and non-symbolic tensors are not supported."
-            )
+            raise ValueError("Cannot evaluate with symbolic tensors.")
 
         return self.forward(*inputs)
 
@@ -106,13 +124,13 @@ class Module:
     @property
     def dtype(self) -> str:
         if self._dtype is None:
-            raise ValueError("Please initialize dtype property")
+            raise ValueError("Please initialize dtype property.")
         return self._dtype
 
     @property
     def shape(self) -> Tuple[int]:
         if self._shape is None:
-            raise ValueError("Please initialize shape property")
+            raise ValueError("Please initialize shape property.")
         return self._shape
 
     def config(self, node_lut):
@@ -121,11 +139,19 @@ class Module:
             "name": self.name,
             "inputs": [node_lut.get(x, None) for x in self.input_nodes],
             "outputs": [node_lut.get(x, None) for x in self.output_nodes],
+            "tensor_inputs": [x.config for x in self.input_tensors],
             "config": self.inner_config(),
         }
 
-    def inner_config(self) -> Dict[str, Any]:
+    def inner_config(self) -> JsonDict:
         raise NotImplementedError
+
+    @classmethod
+    def from_config(cls, node_config: JsonDict) -> "Module":
+        name = node_config["name"]
+        module_config = node_config["config"]
+        create_module = cls.name_to_module[name]
+        return create_module(**module_config)
 
     forward: Callable[..., Any] = _forward_unimplemented
     """Override to define this module's core functionality."""
@@ -133,23 +159,16 @@ class Module:
     set_props_hook: Callable[..., Any] = _set_props_hook_unimplemented
     """Override to set props like shape and dtype on symbolic call."""
 
-    @classmethod
-    def from_config(cls, node_config: Dict[str, Any]) -> "Module":
-        name = node_config["name"]
-        module_config = node_config["config"]
-        create_module = cls._name_to_module[name]
-        return create_module(**module_config)
-
-    def to_rx(self, *inputs):
+    def to_rx(self, *inputs: rx.Observable):
         self._check_signature()
         if len(inputs) != len(self.input_nodes):
             raise ValueError(
-                f"Length mismatch: Expected {len(self.input_nodes)} inputs, "
+                f"Length mismatch: expected {len(self.input_nodes)} inputs, "
                 f"actual {len(inputs)}"
             )
         # TODO Should 0 inputs be an error? If not, what is the observable?
         if len(inputs) == 0:
-            raise ValueError("Requires at least one input")
+            raise ValueError("Requires at least one input.")
         if len(inputs) == 1:
             observable = inputs[0].pipe(ops.map(lambda x: (x,)))
         else:
@@ -165,6 +184,7 @@ class Module:
             forward_op(lambda xs: self.forward(*xs)),
             ops.publish(),
         )
+        observable = cast(rx.core.ConnectableObservable, observable)
         observable.connect()
         return observable
 
@@ -183,11 +203,11 @@ class Module:
 
     def _check_signature(self):
         n_input_nodes = len(self.input_nodes)
-        n_input_forward = len(inspect.signature(self.forward).parameters)
+        n_input_forward = self._num_forward_params()
         if n_input_nodes != n_input_forward:
             raise ValueError(
                 f"Length mismatch: forward requires {n_input_forward} inputs, "
-                f"but module only has {n_input_nodes} input nodes"
+                f"but module only has {n_input_nodes} input nodes."
             )
 
     def _forward_symbolic(self, *inputs: SymbolicTensor) -> SymbolicTensor:
@@ -201,11 +221,20 @@ class Module:
         for tensor in inputs:
             parent = tensor.parent
             self.input_nodes.append(parent)
+            self.input_tensors.append(tensor)
             if parent is None:
                 continue
             parent.output_nodes.append(self)
 
+        self._check_signature()
         self._is_used_in_static_graph = True
         self.set_props_hook(*inputs)
 
         return SymbolicTensor(self.shape, self.dtype, self)
+
+    def _num_forward_params(self):
+        return len(inspect.signature(self.forward).parameters)
+
+
+class InputModule(Module):
+    name = "__AbstractModule"

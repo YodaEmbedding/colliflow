@@ -1,4 +1,5 @@
 import asyncio
+import json
 import random
 from asyncio import StreamReader, StreamWriter
 from pprint import pprint
@@ -14,6 +15,7 @@ from colliflow import (
     SymbolicTensor,
     Tensor,
 )
+
 from .shared_modules import *
 
 IP = "127.0.0.1"
@@ -118,8 +120,8 @@ def multi_branch_model():
 
 
 def model_client_server():
-    client_func = lambda x: Tensor(shape=(14, 14, 512), dtype="uint8")
-    server_func = lambda x: Tensor(shape=(1000,), dtype="float32")
+    client_func = lambda _: Tensor(shape=(14, 14, 512), dtype="uint8")
+    server_func = lambda _: Tensor(shape=(1000,), dtype="float32")
 
     inputs = [Input(shape=(224, 224, 3), dtype="uint8")]
     x = inputs[0]
@@ -143,19 +145,6 @@ def model_client_server():
     model_server = Model(inputs=inputs, outputs=outputs)
 
     return model_client, model_server
-
-
-def model_from_config(model_config):
-    client_func = lambda x: Tensor(shape=(14, 14, 512), dtype="uint8")
-    server_func = lambda x: Tensor(shape=(1000,), dtype="float32")
-
-    model = Model.deserialize_dict(model_config)
-    x = next(x for x in model.modules if isinstance(x, ClientInferenceModel))
-    x.func = client_func
-    x = next(x for x in model.modules if isinstance(x, ServerInferenceModel))
-    x.func = server_func
-
-    return model
 
 
 def main():
@@ -196,8 +185,9 @@ def main_rx():
     model = simple_model()
     print(model)
 
-    # preds = model(Tensor((224, 224, 3), "uint8"))
-    # print(preds)
+    # TODO type checks to ensure always plugging in  correct amount of (,)
+    preds = model(Tensor((224, 224, 3), "uint8"))
+    print(preds)
 
     observables = model.to_rx(frames)
     observable = observables[0]
@@ -256,6 +246,7 @@ async def tcp_echo_client(message):
 def main_tcp():
     model = server_model()
     model_config = model.serialize()
+    print(json.dumps(model.serialize_dict(), indent=2))
     asyncio.run(tcp_echo_client(model_config))
 
 

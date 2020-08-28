@@ -1,9 +1,22 @@
-from time import sleep
+from time import sleep, time
+from typing import Tuple, cast
 
 import rx
 import rx.operators as ops
 
-from colliflow import InputModule, Module, SymbolicTensor, Tensor
+from colliflow import (
+    InputModule,
+    Model,
+    Module,
+    SymbolicTensor,
+    Tensor,
+)
+
+epoch = time()
+
+
+def get_time():
+    return time() - epoch
 
 
 class Preprocessor(Module):
@@ -134,17 +147,48 @@ class TcpClient(Module):
 #         return tensor
 
 
-class FakeInput(InputModule):
-    def __init__(self, shape, dtype, **kwargs):
+def FakeInput(
+    shape: Tuple[int], dtype: str, scheduler=None
+):  # pylint: disable=invalid-name
+    return FakeInputLayer(shape, dtype, scheduler=scheduler)()
+
+
+class FakeInputLayer(InputModule):
+    name = "FakeInput"
+
+    def __init__(self, shape: Tuple[int], dtype: str, **kwargs):
         super().__init__(shape, dtype, **kwargs)
 
     def inner_config(self):
-        return {}
+        return {"shape": self.shape, "dtype": self.dtype}
 
     def to_rx(self):
         frames = rx.interval(1).pipe(
-            # ops.do_action(lambda x: print(f"\n{get_time():.1f}  Frame {x}\n")),
-            ops.map(lambda x: Tensor((224, 224, 3), "uint8")),
+            ops.do_action(lambda x: print(f"\n{get_time():.1f}  Frame {x}\n")),
+            ops.map(lambda _: self.forward()),
             ops.publish(),
         )
+        frames = cast(rx.core.ConnectableObservable, frames)
+        frames.connect()
         return frames
+
+    def forward(self):
+        return Tensor((224, 224, 3), "uint8")
+
+
+def model_from_config(model_config) -> Model:
+    client_func = lambda _: Tensor(shape=(14, 14, 512), dtype="uint8")
+    server_func = lambda _: Tensor(shape=(1000,), dtype="float32")
+
+    model = (
+        Model.deserialize(model_config)
+        if isinstance(model_config, str)
+        else Model.deserialize_dict(model_config)
+    )
+
+    x = next(x for x in model.modules if isinstance(x, ClientInferenceModel))
+    x.func = client_func
+    x = next(x for x in model.modules if isinstance(x, ServerInferenceModel))
+    x.func = server_func
+
+    return model
