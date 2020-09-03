@@ -49,6 +49,11 @@ class Model:
         self.modules = list(self._compute_order())
 
     def __call__(self, *inputs: MaybeSequence[Tensor]) -> Sequence[Tensor]:
+        """Synchronously run model prediction.
+
+        For practical applications, asynchronous modes of operation
+        should be preferred. See `to_rx` for more information.
+        """
         xs = [_coerce_sequence_type(x, Tensor) for x in inputs]
         return self._predict(*xs)
 
@@ -66,6 +71,13 @@ class Model:
     def to_rx(
         self, *inputs: MaybeSequence[rx.Observable]
     ) -> List[rx.Observable]:
+        """Construct asynchronous pipeline using given input streams.
+
+        Makes use of the Reactive Extensions (Rx) observable design
+        pattern. Every module within the graph represents an observable
+        and/or observer. Observable modules produce a stream of tensors;
+        observers consume streams of tensors.
+        """
         func = lambda module, xs: module.to_rx(*xs)
         xs = [_coerce_sequence_type(x, rx.Observable) for x in inputs]
         return self._forward_graph(xs, func)

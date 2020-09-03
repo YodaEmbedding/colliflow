@@ -53,7 +53,8 @@ class Module:
     3. Either override `dtype`, and `shape` or set their backing fields,
        `_dtype`, and `_shape` for serialization.
     4. Set `name` to a unique identifier for the class.
-    5. Override `forward` for execution.
+    5. Either override `forward` to define the synchronous execution, or
+       override `to_rx` to define a custom asynchronous method.
 
     Optionally:
 
