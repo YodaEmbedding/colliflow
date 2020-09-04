@@ -54,7 +54,7 @@ class Module:
        `_dtype`, and `_shape` for serialization.
     4. Set `name` to a unique identifier for the class.
     5. Either override `forward` to define the synchronous execution, or
-       override `to_rx` to define a custom asynchronous method.
+       override `forward_rx` to define a custom asynchronous method.
 
     Optionally:
 
@@ -109,7 +109,7 @@ class Module:
 
         if all(is_syms) and not force_eval:
             inputs = cast(Tuple[SymbolicTensor, ...], inputs)
-            return self._forward_symbolic(*inputs)
+            return self._set_graph_inputs(*inputs)
 
         if any(is_syms):
             raise ValueError("Cannot evaluate with symbolic tensors.")
@@ -160,29 +160,27 @@ class Module:
     set_props_hook: Callable[..., Any] = _set_props_hook_unimplemented
     """Override to set props like shape and dtype on symbolic call."""
 
-    def to_rx(self, *inputs: rx.Observable):
-        self._check_signature()
-        if len(inputs) != len(self.input_nodes):
-            raise ValueError(
-                f"Length mismatch: expected {len(self.input_nodes)} inputs, "
-                f"actual {len(inputs)}"
-            )
-        # TODO Should 0 inputs be an error? If not, what is the observable?
-        if len(inputs) == 0:
-            raise ValueError("Requires at least one input.")
-        if len(inputs) == 1:
-            observable = inputs[0].pipe(ops.map(lambda x: (x,)))
-        else:
-            observable = rx.zip(*inputs)
-        flatten = inspect.isgeneratorfunction(self.forward)
-        forward_op = ops.flat_map if flatten else ops.map
-        ops_pre = []
+    def forward_rx(
+        self, *inputs: rx.Observable
+    ) -> rx.core.ConnectableObservable:
+        """
+        Produces output observable from input observables.
+
+        Override if desired. The default implementation zips together
+        the input observables, puts the resulting observable on the
+        correct scheduler, and then runs `forward`. The output
+        observable is multicast so it can be reused without worrying
+        about recomputation.
+        """
+        self._check_num_inputs(*inputs)
+        observable = _zip_observables(*inputs)
         if self._scheduler is not None:
-            ops_pre.append(ops.observe_on(schedulers[self._scheduler]))
+            observable = observable.pipe(
+                ops.observe_on(schedulers[self._scheduler])
+            )
         observable = observable.pipe(
-            *ops_pre,
             ops.do_action(lambda xs: print(f"{get_time():.1f}  {self}{xs}")),
-            forward_op(lambda xs: self.forward(*xs)),
+            self._forward_to_rx_op(),
             ops.publish(),
         )
         observable = cast(rx.core.ConnectableObservable, observable)
@@ -202,7 +200,16 @@ class Module:
         # Multi-output: forward: Sequence[Tensor] -> Sequence[Tensor]
         # Observable: forward:
 
-    def _check_signature(self):
+        # def forward_async?? or forward_rx???
+        # should an async take observableS as input? or a single zipped one?
+        # TCP module probably doesn't want to zip the input observables...
+        # but what about other applications?
+        # do we need code around forward_rx? (e.g. scheduler, argument checks?)
+        # does scheduler even make sense for multi-stream modules?
+
+        # should modules be composable in heirarchy?
+
+    def _check_forward_signature(self):
         n_input_nodes = len(self.input_nodes)
         n_input_forward = self._num_forward_params()
         if n_input_nodes != n_input_forward:
@@ -211,7 +218,19 @@ class Module:
                 f"but module only has {n_input_nodes} input nodes."
             )
 
-    def _forward_symbolic(self, *inputs: SymbolicTensor) -> SymbolicTensor:
+    def _check_num_inputs(self, *inputs):
+        if len(inputs) != len(self.input_nodes):
+            raise ValueError(
+                f"Length mismatch: expected {len(self.input_nodes)} inputs, "
+                f"actual {len(inputs)}"
+            )
+
+    def _forward_to_rx_op(self) -> Callable[[rx.Observable], rx.Observable]:
+        flatten = inspect.isgeneratorfunction(self.forward)
+        forward_op = ops.flat_map if flatten else ops.map
+        return forward_op(lambda xs: self.forward(*xs))
+
+    def _set_graph_inputs(self, *inputs: SymbolicTensor) -> SymbolicTensor:
         if self._is_used_in_static_graph:
             raise RuntimeError(
                 "Cannot reuse a module instance more than once in a static "
@@ -227,7 +246,7 @@ class Module:
                 continue
             parent.output_nodes.append(self)
 
-        self._check_signature()
+        self._check_forward_signature()
         self._is_used_in_static_graph = True
         self.set_props_hook(*inputs)
 
@@ -239,3 +258,11 @@ class Module:
 
 class InputModule(Module):
     name = "__AbstractModule"
+
+
+def _zip_observables(*inputs: rx.Observable) -> rx.Observable:
+    if len(inputs) == 0:
+        raise ValueError("Requires at least one input.")
+    if len(inputs) == 1:
+        return inputs[0].pipe(ops.map(lambda x: (x,)))
+    return rx.zip(*inputs)

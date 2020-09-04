@@ -78,7 +78,7 @@ class Model:
         and/or observer. Observable modules produce a stream of tensors;
         observers consume streams of tensors.
         """
-        func = lambda module, xs: module.to_rx(*xs)
+        func = lambda module, xs: module.forward_rx(*xs)
         xs = [_coerce_sequence_type(x, rx.Observable) for x in inputs]
         return self._forward_graph(xs, func)
 

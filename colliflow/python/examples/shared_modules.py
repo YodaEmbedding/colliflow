@@ -162,7 +162,7 @@ class FakeInputLayer(InputModule):
     def inner_config(self):
         return {"shape": self.shape, "dtype": self.dtype}
 
-    def to_rx(self):
+    def forward_rx(self):
         frames = rx.interval(1).pipe(
             ops.do_action(lambda x: print(f"\n{get_time():.1f}  Frame {x}\n")),
             ops.map(lambda _: self.forward()),
