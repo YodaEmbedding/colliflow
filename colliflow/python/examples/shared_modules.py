@@ -4,13 +4,7 @@ from typing import Tuple, cast
 import rx
 import rx.operators as ops
 
-from colliflow import (
-    InputModule,
-    Model,
-    Module,
-    SymbolicTensor,
-    Tensor,
-)
+from colliflow import InputModule, Model, Module, SymbolicTensor, Tensor
 
 epoch = time()
 

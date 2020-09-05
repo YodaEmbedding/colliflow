@@ -8,13 +8,7 @@ from time import sleep, time
 import rx
 from rx import operators as ops
 
-from colliflow import (
-    Input,
-    Model,
-    Module,
-    SymbolicTensor,
-    Tensor,
-)
+from colliflow import Input, Model, Module, SymbolicTensor, Tensor
 
 from .shared_modules import *
 
