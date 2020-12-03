@@ -23,3 +23,9 @@ class InputLayer(InputModule):
 
     def forward(self, tensor: Tensor):
         return tensor
+
+
+__all__ = [
+    "Input",
+    "InputLayer",
+]

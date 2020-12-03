@@ -285,3 +285,8 @@ class _Fringe:
 
 # def split_model():
 #     pass
+
+
+__all__ = [
+    "Model",
+]

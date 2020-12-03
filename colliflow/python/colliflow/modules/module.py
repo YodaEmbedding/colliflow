@@ -266,3 +266,9 @@ def _zip_observables(*inputs: rx.Observable) -> rx.Observable:
     if len(inputs) == 1:
         return inputs[0].pipe(ops.map(lambda x: (x,)))
     return rx.zip(*inputs)
+
+
+__all__ = [
+    "InputModule",
+    "Module",
+]
