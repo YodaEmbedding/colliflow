@@ -1,79 +1,279 @@
 # USE THIS DOCUMENT FOR EXPLAINING AND OVERVIEW
 
 import asyncio
+import inspect
 import json
 import socket
 from asyncio import StreamReader, StreamWriter
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, cast
 
 import numpy as np
 import rx
 import rx.subject
 from rx import operators as ops
 
-Shape = Union[Tuple[None], Tuple[int, ...]]
+from colliflow.modules import _zip_observables
+from colliflow.tensors import Dtype, Shape, SymbolicTensor, Tensor
 
 
 @dataclass
 class TensorInfo:
-    dtype: str
+    dtype: Dtype
     shape: Shape
 
 
+JsonDict = Dict[str, Any]
 Graph = "Graph"
-Tensor = "Tensor"
-
-# Tensor?
-# SymbolicTensor?
 
 # SerializableGraphNode
 # StaticLinkable
 
-
-class Module:
-    # config()
-    # dtype?  <-- uhhh don't think this is a good idea here
-    # shape?
-    pass
+# TODO copy over relevant code here... e.g. serialization, observable construction, ...
 
 
-# TODO How are Modules linked into a graph via the Functional __call__ API?
+@dataclass
+class Node:
+    input_nodes: List["Node"] = []
+    output_nodes: List["Node"] = []
+    input_shapes: List[Shape] = []
+    input_dtypes: List[Dtype] = []
+    output_shapes: List[Shape] = []
+    output_dtypes: List[Dtype] = []
+
+
+# TODO serialization
+# TODO "to_rx" (done by Model/Graph?) (needs to recognize "input" modules)
+
+
+class Module(Node):
+    name: Optional[str] = None
+    name_to_module: Dict[str, Type["Module"]] = {}
+    registered_modules: List[Type["Module"]] = []
+
+    def __init__(self, shape: Shape, dtype: Dtype):
+        self.output_shapes = [shape]
+        self.output_dtypes = [dtype]
+        self._is_used_in_static_graph: bool = False
+
+    def __init_subclass__(cls, **kwargs):
+        """Registers module classes (required for serializability).
+
+        If the class is registered as an "__AbstractModule",
+        then the name registration is deferred to concrete submodules.
+        """
+        if cls.name == "__AbstractModule":
+            cls.name = None
+            super().__init_subclass__(**kwargs)
+            return
+        if cls.name is None:
+            cls.name = cls.__name__
+        cls.registered_modules.append(cls)
+        cls.name_to_module[cls.name] = cls
+        super().__init_subclass__(**kwargs)
+
+    def __call__(self, *inputs: SymbolicTensor) -> SymbolicTensor:
+        """Connects module instances into a static graph."""
+        return self._set_graph_inputs(*inputs)
+
+    def __repr__(self) -> str:
+        kwargs_str = ", ".join(
+            f"{k}={v!r}" for k, v in self.inner_config().items()
+        )
+        return f"{self.name}({kwargs_str})"
+
+    def inner_config(self) -> JsonDict:
+        """Override this to serialize custom module parameters."""
+        raise NotImplementedError
+
+    def to_rx(self, *inputs: rx.Observable) -> rx.Observable:
+        """Produces output observable from input observables.
+
+        See abstract subclass (e.g. `ForwardModule`) docstring
+        for further details.
+        """
+        raise NotImplementedError
+
+    def config(self, node_lut: Dict[Node, int]) -> JsonDict:
+        """Returns serializable JSON dictionary.
+
+        JSON dictionary describes graph connections and parameters
+        so that a deserializer can reconstruct the module.
+        """
+        return {
+            "id": node_lut[self],
+            "name": self.name,
+            "inputs": [node_lut.get(x, None) for x in self.input_nodes],
+            "outputs": [node_lut.get(x, None) for x in self.output_nodes],
+            "tensor_inputs": [
+                (shape, dtype) for shape, dtype in
+                zip(self.input_shapes, self.input_dtypes)
+            ],
+            "config": self.inner_config(),
+        }
+
+    @classmethod
+    def from_config(cls, node_config: JsonDict) -> "Module":
+        """Constructs module using JSON config."""
+        name = node_config["name"]
+        module_config = node_config["config"]
+        create_module = cls.name_to_module[name]
+        return create_module(**module_config)
+
+    def _check_num_inputs(
+        self, n_input: int, check_nodes=False, check_signature=False
+    ):
+        n_nodes = len(self.input_nodes)
+        if check_nodes and n_input != n_nodes:
+            raise ValueError(
+                f"Length mismatch: expected {n_nodes} inputs, "
+                f"actual {n_input}."
+            )
+
+    def _set_graph_inputs(self, *inputs: SymbolicTensor) -> SymbolicTensor:
+        if self._is_used_in_static_graph:
+            raise RuntimeError(
+                "Cannot reuse a module instance in a static graph."
+            )
+
+        self._check_num_inputs(len(inputs), check_signature=True)
+
+        # Link static graph nodes together
+        for tensor in inputs:
+            parent = tensor.parent
+            self.input_nodes.append(parent)
+            self.input_dtypes.append(tensor.dtype)
+            self.input_shapes.append(tensor.shape)
+            if parent is None:
+                continue
+            parent.output_nodes.append(self)
+
+        self._is_used_in_static_graph = True
+
+        outputs = [
+            SymbolicTensor(shape, dtype, self)
+            for shape, dtype in zip(self.output_shapes, self.output_dtypes)
+        ]
+        return outputs[0]
 
 
 class ForwardModule(Module):
     """Function from M tensors to N tensors. M, N > 0."""
 
-    def forward(self, *inputs: Tensor) -> List[Tensor]:
+    name = "__AbstractModule"
+
+    def to_rx(self, *inputs: rx.Observable) -> rx.Observable:
+        """Produces output observable from input observables.
+
+        Zips together the input observables,
+        puts the resulting observable on the correct scheduler,
+        and then runs `forward`.
+        The output observable is multicast so it can be reused
+        without worrying about recomputation.
+        """
+        self._check_num_inputs(len(inputs), check_nodes=True)
+        observable = _zip_observables(*inputs)
+        observable = observable.pipe(
+            self._forward_to_rx_op(),
+            ops.publish(),
+        )
+        observable = cast(rx.core.ConnectableObservable, observable)
+        observable.connect()
+        return observable
+
+    def forward(self, *inputs: Tensor) -> Tensor:
+        """Override to define this module's core functionality."""
         raise NotImplementedError
 
+    def _forward_to_rx_op(self) -> Callable[[rx.Observable], rx.Observable]:
+        return ops.map(lambda xs: self.forward(*xs))
 
-class InputModule(Module):
-    """Just like ForwardModule, but with forward being passthrough...?"""
+    def _check_num_inputs(
+        self, n_input: int, check_nodes=False, check_signature=False
+    ):
+        super()._check_num_inputs(n_input, check_nodes=check_nodes)
+        n_forward = self._num_forward_params()
+        if check_signature and n_input != n_forward:
+            raise ValueError(
+                f"Length mismatch: expected {n_forward} inputs, "
+                f"actual {n_input}."
+            )
 
-    def forward(self, *inputs: Tensor) -> List[Tensor]:
-        return inputs
+    def _num_forward_params(self):
+        return len(inspect.signature(self.forward).parameters)
 
 
 class ForwardAsyncModule(Module):
     """Function from M observables to N observables. M, N > 0."""
 
-    def forward(self, *inputs: rx.Observable) -> List[rx.Observable]:
+    name = "__AbstractModule"
+
+    def forward(self, *inputs: rx.Observable) -> rx.Observable:
+        """Override to define this module's core functionality.
+
+        Should return observables
+        after transforming the input observables in some manner.
+        """
         raise NotImplementedError
+
+    def to_rx(self, *inputs: rx.Observable) -> rx.Observable:
+        return self.forward(*inputs)
 
 
 class InputAsyncModule(Module):
-    """Outputs observables."""
+    """Produces Rx observables."""
 
-    def produce(self) -> List[rx.Observable]:
+    name = "__AbstractModule"
+
+    def produce(self) -> rx.Observable:
+        """Override to define this module's core functionality.
+
+        Should create new observables and return them.
+        """
         raise NotImplementedError
+
+    def to_rx(self, *inputs: rx.Observable) -> rx.Observable:
+        self._check_num_inputs(len(inputs), check_nodes=True)
+        return self.produce().pipe(ops.publish())
 
 
 class OutputAsyncModule(Module):
-    """Accepts observables."""
+    """Consumes Rx observables."""
+
+    name = "__AbstractModule"
 
     def consume(self, *inputs: rx.Observable):
+        """Override to define this module's core functionality.
+
+        Should subscribe to the input observables.
+        """
         raise NotImplementedError
+
+    def to_rx(self, *inputs: rx.Observable) -> rx.Observable:
+        self._check_num_inputs(len(inputs), check_nodes=True)
+        self.consume(*inputs)
+        # Create dummy observable to satisfy type signature
+        return rx.from_iterable([])
+
+
+class InputModule(ForwardModule):
+    """Passes input tensor through without any further processing."""
+
+    name = "Input"
+
+    def __init__(self, shape: Shape, dtype: Dtype, **kwargs):
+        super().__init__(shape, dtype, **kwargs)
+        self.input_shapes = [shape]
+        self.input_dtypes = [dtype]
+
+    def forward(self, input_: Tensor) -> Tensor:
+        return input_
+
+
+def Input(shape: Tuple[int], dtype: str):  # pylint: disable=invalid-name
+    """Creates an input module of given shape and dtype."""
+    x = SymbolicTensor(shape, dtype)
+    return InputModule(shape, dtype)(x)
 
 
 @dataclass
@@ -132,7 +332,7 @@ array_like = [
 ]
 
 
-def tensor_from_bytes(dtype: str, shape: Shape, data: bytes):
+def tensor_from_bytes(dtype: Dtype, shape: Shape, data: bytes):
     if dtype == "bytes":
         assert len(shape) == 1 and shape[0] is None
         tensor_data = data
@@ -240,11 +440,9 @@ class TcpReceiver(InputAsyncModule):
         self._stream: Optional[TcpTensorInputStream] = None
 
     def start(self):
-        dtypes = [x.dtype for x in self._infos]
-        shapes = [x.shape for x in self._infos]
         # self._socket.connect()
         stream_reader = TcpSocketStreamReader(self._socket)
-        self._stream = TcpTensorInputStream(stream_reader, dtypes, shapes)
+        self._stream = TcpTensorInputStream(stream_reader, self._infos)
         self._network_reader = rx.from_iterable(self._reader()).pipe(
             ops.share(),
         )
@@ -414,23 +612,30 @@ server = Server(host="0.0.0.0", port=5678)
 # TODO rate controls,  CONTIGUOUS_INTERVAL = 50ms  (computed from upload BW)
 # TODO bi-directional time/rate sync
 
-# "Composable" hierarchical modules?
-
+# TODO props hook for defining module output_shapes/dtypes at runtime
+# TODO module multi-output
+# TODO "composable" hierarchical modules?
 # What about "InputModules" that run synchronously when you call a model?
 # e.g. preds = model(frames)
 
-# TcpServer(AsyncModule) runs on client, creates the following two on server:
-# TcpReceiver(InputAsyncModule)
-# TcpSender(OutputAsyncModule)
-
-# What are we trying to achieve using "AsyncModule"?
-# Perhaps AsyncModule.forward should be renamed to "forward_rx".
-# And Module should define "forward", which can be converted to "forward_rx".
+# STAGES
+#
+# 0. User defines custom module classes
+# 1. User connects modules into a graph
+# 2. User "runs" graph:
+#   2.1 module.start() for each module
+#     2.1.1. Sub-graph is serialized
+#     2.1.2. Sub-graph is transmitted to server
+#     2.1.3. Server "runs" sub-graph
+#       2.1.3.1. module.start() for each sub-graph module
+#       2.1.3.1. module.forward() for each sub-graph module, then subscribe
+#       2.1.3.3. Server responds that sub-graph is ready
+#   2.2 module.forward() for each module, then subscribe
 
 # Graph execution order:
 #
 # This is probably what makes sense:
 #
-# .forward_rx() to set up observable connections
 # .start() to run any initialization code
+# .forward_rx() to set up observable connections
 # begin pushing frames into pipeline
