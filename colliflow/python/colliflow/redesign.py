@@ -76,35 +76,10 @@ class OutputAsyncModule(Module):
         raise NotImplementedError
 
 
-# "Composable" hierarchical modules?
-
-# What about "InputModules" that run synchronously when you call a model?
-# e.g. preds = model(frames)
-
-# TcpServer(AsyncModule) runs on client, creates the following two on server:
-# TcpReceiver(InputAsyncModule)
-# TcpSender(OutputAsyncModule)
-
-
-# The following is handled by demuxer:
-# StreamID: "Stream of X observable"
-
-
 @dataclass
 class TcpStreamMessageHeader:
     stream_id: int
     length: int
-
-
-# The following is handled stream-by-stream:
-# Tensor: DataType, Shape, Payload
-
-
-@dataclass
-class TensorMessageHeader:
-    num_bytes: int
-    # dtype: str
-    # shape: Tuple[int]
 
 
 class TcpSocketStreamReader:
@@ -128,9 +103,6 @@ class TcpSocketStreamReader:
         length = self.readint(4)
         msg = self.readexactly(length)
         return json.loads(msg.decode())
-
-    # def readline(self):
-    #     while True:
 
 
 class TcpSocketStreamWriter:
@@ -441,6 +413,15 @@ server = Server(host="0.0.0.0", port=5678)
 # TODO "state" machine which streams data after computing upload BW/ping
 # TODO rate controls,  CONTIGUOUS_INTERVAL = 50ms  (computed from upload BW)
 # TODO bi-directional time/rate sync
+
+# "Composable" hierarchical modules?
+
+# What about "InputModules" that run synchronously when you call a model?
+# e.g. preds = model(frames)
+
+# TcpServer(AsyncModule) runs on client, creates the following two on server:
+# TcpReceiver(InputAsyncModule)
+# TcpSender(OutputAsyncModule)
 
 # What are we trying to achieve using "AsyncModule"?
 # Perhaps AsyncModule.forward should be renamed to "forward_rx".
