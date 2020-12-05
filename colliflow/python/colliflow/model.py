@@ -98,66 +98,14 @@ class Model:
     @staticmethod
     def deserialize_dict(model_config: List[JsonDict]) -> "Model":
         """Deserialize model from JSON-serializable structure."""
-        model_inputs = []
-        model_outputs = []
-        outputs: Dict[int, SymbolicTensor] = {}
-        fringe = _Fringe()
-        discovered = set()
-
-        for node_cfg in model_config:
-            module_type = Module.name_to_module[node_cfg["name"]]
-            if issubclass(module_type, InputModule):
-                node_id = node_cfg["id"]
-                fringe.put(node_id)
-                discovered.add(node_id)
-
-        node_configs = {node_cfg["id"]: node_cfg for node_cfg in model_config}
-
-        while not fringe.empty():
-            node_id = fringe.get()
-            node_cfg = node_configs[node_id]
-            module_type = Module.name_to_module[node_cfg["name"]]
-            is_input = issubclass(module_type, InputModule)
-            is_output = len(node_cfg["outputs"]) == 0
-            ready = is_input or all(x in outputs for x in node_cfg["inputs"])
-
-            if not ready:
-                fringe.put_waiting(node_id)
-                continue
-
-            module = Module.from_config(node_cfg)
-            inputs = (
-                [SymbolicTensor(s, d) for s, d in node_cfg["tensor_inputs"]]
-                if is_input
-                else [outputs[x] for x in node_cfg["inputs"]]
-            )
-            try:
-                outputs[node_id] = module(*inputs)
-            except Exception as e:
-                raise Exception(
-                    f"{module} could not be called with the inputs {inputs}."
-                ) from e
-
-            for nid in node_cfg["outputs"]:
-                if nid in discovered:
-                    continue
-                fringe.put(nid)
-                discovered.add(nid)
-
-            if is_input:
-                model_inputs.append(outputs[node_id])
-
-            if is_output:
-                model_outputs.append(outputs[node_id])
-
-        return Model(inputs=model_inputs, outputs=model_outputs)
+        return _deserialize_dict(model_config)
 
     def _compute_order(self) -> Iterator[Module]:
         visited = set()
         input_nodes = {x.parent for x in self._inputs}
         for output in self._outputs:
             output_node = output.parent
-            for node in self._output_visiting_order(output_node, input_nodes):
+            for node in _output_visiting_order(output_node, input_nodes):
                 if node in visited:
                     continue
                 visited.add(node)
@@ -167,7 +115,7 @@ class Model:
         node_set: Set[Module] = set()
         for x in self._inputs:
             input_module = x.parent
-            yield from self._flatten(input_module, node_set)
+            yield from _flatten(input_module, node_set)
 
     def _predict(self, *inputs: Sequence[Tensor]) -> List[Tensor]:
         apply_module = lambda module, xs: module(*xs)
@@ -217,33 +165,6 @@ class Model:
         node_lut = {node: i for i, node in enumerate(nodes)}
         return ((node, node.config(node_lut)) for node in node_lut)
 
-    @classmethod
-    def _flatten(cls, node: Module, nodes: Set[Module]) -> Iterator[Module]:
-        """Visits all nodes in graph."""
-        if node is None or node in nodes:
-            return
-        yield node
-        nodes.add(node)
-        for x in node.output_nodes:
-            yield from cls._flatten(x, nodes)
-
-    @classmethod
-    def _output_visiting_order(
-        cls, output_node: Module, input_nodes: Iterable[Module]
-    ) -> Iterator[Module]:
-        """Yields node computation order for output node.
-
-        This is done via post-order DFS traversal over the inverted tree.
-        """
-        if output_node in input_nodes:
-            yield output_node
-            return
-
-        for node in output_node.input_nodes:
-            yield from cls._output_visiting_order(node, input_nodes)
-
-        yield output_node
-
 
 class _Fringe:
     """Manage fringe for correct order of node expansion.
@@ -281,6 +202,89 @@ class _Fringe:
 
     def put_waiting(self, item):
         self._fringe_wait.put(item)
+
+
+def _deserialize_dict(model_config: List[JsonDict]) -> Model:
+    model_inputs = []
+    model_outputs = []
+    outputs: Dict[int, SymbolicTensor] = {}
+    fringe = _Fringe()
+    discovered = set()
+
+    for node_cfg in model_config:
+        module_type = Module.name_to_module[node_cfg["name"]]
+        if issubclass(module_type, InputModule):
+            node_id = node_cfg["id"]
+            fringe.put(node_id)
+            discovered.add(node_id)
+
+    node_configs = {node_cfg["id"]: node_cfg for node_cfg in model_config}
+
+    while not fringe.empty():
+        node_id = fringe.get()
+        node_cfg = node_configs[node_id]
+        module_type = Module.name_to_module[node_cfg["name"]]
+        is_input = issubclass(module_type, InputModule)
+        is_output = len(node_cfg["outputs"]) == 0
+        ready = is_input or all(x in outputs for x in node_cfg["inputs"])
+
+        if not ready:
+            fringe.put_waiting(node_id)
+            continue
+
+        module = Module.from_config(node_cfg)
+        inputs = (
+            [SymbolicTensor(s, d) for s, d in node_cfg["tensor_inputs"]]
+            if is_input
+            else [outputs[x] for x in node_cfg["inputs"]]
+        )
+        try:
+            outputs[node_id] = module(*inputs)
+        except Exception as e:
+            raise Exception(
+                f"{module} could not be called with the inputs {inputs}."
+            ) from e
+
+        for nid in node_cfg["outputs"]:
+            if nid in discovered:
+                continue
+            fringe.put(nid)
+            discovered.add(nid)
+
+        if is_input:
+            model_inputs.append(outputs[node_id])
+
+        if is_output:
+            model_outputs.append(outputs[node_id])
+
+    return Model(inputs=model_inputs, outputs=model_outputs)
+
+
+def _flatten(node: Module, nodes: Set[Module]) -> Iterator[Module]:
+    """Visits all nodes in graph."""
+    if node is None or node in nodes:
+        return
+    yield node
+    nodes.add(node)
+    for x in node.output_nodes:
+        yield from _flatten(x, nodes)
+
+
+def _output_visiting_order(
+    output_node: Module, input_nodes: Iterable[Module]
+) -> Iterator[Module]:
+    """Yields node computation order for output node.
+
+    This is done via post-order DFS traversal over the inverted tree.
+    """
+    if output_node in input_nodes:
+        yield output_node
+        return
+
+    for node in output_node.input_nodes:
+        yield from _output_visiting_order(node, input_nodes)
+
+    yield output_node
 
 
 # def split_model():
