@@ -191,7 +191,7 @@ class _Fringe:
             self._wait_count = 0
             return self._fringe.get()
 
-        if self._wait_count < len(self._fringe_wait):
+        if self._wait_count < self._fringe_wait.qsize():
             self._wait_count += 1
             return self._fringe_wait.get()
 
