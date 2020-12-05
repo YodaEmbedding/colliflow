@@ -37,6 +37,13 @@ def _coerce_sequence_type(x: MaybeSequence[T], t: Type[T]) -> Sequence[T]:
 
 
 class Model:
+    """Model representing a collaborative graph.
+
+    Attributes:
+        inputs: tensors whose parents are input modules
+        outputs: tensors whose parents are the output modules
+    """
+
     modules: List[Module]
     _inputs: List[SymbolicTensor]
     _outputs: List[SymbolicTensor]
@@ -191,6 +198,7 @@ def _deserialize_dict(model_config: List[JsonDict]) -> Model:
     fringe = _Fringe()
     discovered = set()
 
+    # Initialize fringe with input modules
     for node_cfg in model_config:
         module_type = Module.name_to_module[node_cfg["name"]]
         if issubclass(module_type, InputModule):
@@ -208,23 +216,15 @@ def _deserialize_dict(model_config: List[JsonDict]) -> Model:
         is_output = len(node_cfg["outputs"]) == 0
         ready = is_input or all(x in outputs for x in node_cfg["inputs"])
 
+        # If input tensors are not yet available, save node for later expansion
         if not ready:
             fringe.put_waiting(node_id)
             continue
 
-        module = Module.from_config(node_cfg)
-        inputs = (
-            [SymbolicTensor(s, d) for s, d in node_cfg["tensor_inputs"]]
-            if is_input
-            else [outputs[x] for x in node_cfg["inputs"]]
-        )
-        try:
-            outputs[node_id] = module(*inputs)
-        except Exception as e:
-            raise Exception(
-                f"{module} could not be called with the inputs {inputs}."
-            ) from e
+        # Create module and connect it with input nodes
+        outputs[node_id] = _create_and_init_module(node_cfg, outputs, is_input)
 
+        # Append node outputs to fringe
         for nid in node_cfg["outputs"]:
             if nid in discovered:
                 continue
@@ -238,6 +238,26 @@ def _deserialize_dict(model_config: List[JsonDict]) -> Model:
             model_outputs.append(outputs[node_id])
 
     return Model(inputs=model_inputs, outputs=model_outputs)
+
+
+def _create_and_init_module(
+    node_cfg: JsonDict, outputs: Dict[int, SymbolicTensor], is_input: bool
+) -> SymbolicTensor:
+    # Create module and determine its inputs
+    module = Module.from_config(node_cfg)
+    inputs = (
+        [SymbolicTensor(s, d) for s, d in node_cfg["tensor_inputs"]]
+        if is_input
+        else [outputs[x] for x in node_cfg["inputs"]]
+    )
+
+    # Use inputs to instantiate module
+    try:
+        return module(*inputs)
+    except Exception as e:
+        raise Exception(
+            f"{module} could not be called with the inputs {inputs}."
+        ) from e
 
 
 def _flatten_graph(inputs: List[SymbolicTensor]) -> Iterator[Module]:
@@ -290,10 +310,6 @@ def _output_visiting_order(
         yield from _output_visiting_order(node, input_nodes)
 
     yield output_node
-
-
-# def split_model():
-#     pass
 
 
 __all__ = [
