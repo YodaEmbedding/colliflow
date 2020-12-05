@@ -46,7 +46,7 @@ class Model:
     ):
         self._inputs = inputs
         self._outputs = outputs
-        self.modules = list(self._compute_order())
+        self.modules = list(_compute_order(self._inputs, self._outputs))
 
     def __call__(self, *inputs: MaybeSequence[Tensor]) -> Sequence[Tensor]:
         """Synchronously run model prediction.
@@ -100,23 +100,6 @@ class Model:
         """Deserialize model from JSON-serializable structure."""
         return _deserialize_dict(model_config)
 
-    def _compute_order(self) -> Iterator[Module]:
-        visited = set()
-        input_nodes = {x.parent for x in self._inputs}
-        for output in self._outputs:
-            output_node = output.parent
-            for node in _output_visiting_order(output_node, input_nodes):
-                if node in visited:
-                    continue
-                visited.add(node)
-                yield node
-
-    def _flatten_graph(self) -> Iterator[Module]:
-        node_set: Set[Module] = set()
-        for x in self._inputs:
-            input_module = x.parent
-            yield from _flatten(input_module, node_set)
-
     def _predict(self, *inputs: Sequence[Tensor]) -> List[Tensor]:
         apply_module = lambda module, xs: module(*xs)
         return self._forward_graph(inputs, apply_module)
@@ -155,13 +138,10 @@ class Model:
 
         return [outputs[x] for x in output_parents]
 
-    def _serialize_pairs(
-        self, skip_unneeded: bool = True
-    ) -> Iterator[Tuple[Module, JsonDict]]:
-        nodes = self._flatten_graph()
-        if skip_unneeded:
-            valid = set(self.modules)
-            nodes = (x for x in nodes if x in valid)
+    def _serialize_pairs(self) -> Iterator[Tuple[Module, JsonDict]]:
+        """Yields pairs of modules and serialized dicts."""
+        valid_nodes = set(self.modules)
+        nodes = (x for x in _flatten_graph(self._inputs) if x in valid_nodes)
         node_lut = {node: i for i, node in enumerate(nodes)}
         return ((node, node.config(node_lut)) for node in node_lut)
 
@@ -260,14 +240,39 @@ def _deserialize_dict(model_config: List[JsonDict]) -> Model:
     return Model(inputs=model_inputs, outputs=model_outputs)
 
 
+def _flatten_graph(inputs: List[SymbolicTensor]) -> Iterator[Module]:
+    """Yields all nodes in graph.
+
+    The parents of the input tensors are the "input modules".
+    """
+    node_set: Set[Module] = set()
+    for x in inputs:
+        input_module = x.parent
+        yield from _flatten(input_module, node_set)
+
+
 def _flatten(node: Module, nodes: Set[Module]) -> Iterator[Module]:
-    """Visits all nodes in graph."""
     if node is None or node in nodes:
         return
     yield node
     nodes.add(node)
     for x in node.output_nodes:
         yield from _flatten(x, nodes)
+
+
+def _compute_order(
+    inputs: List[SymbolicTensor], outputs: List[SymbolicTensor]
+) -> Iterator[Module]:
+    """Yields modules in computation order."""
+    visited = set()
+    input_nodes = {x.parent for x in inputs}
+    for output in outputs:
+        output_node = output.parent
+        for node in _output_visiting_order(output_node, input_nodes):
+            if node in visited:
+                continue
+            visited.add(node)
+            yield node
 
 
 def _output_visiting_order(
