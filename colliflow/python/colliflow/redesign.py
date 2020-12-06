@@ -14,6 +14,7 @@ import rx.subject
 from rx import operators as ops
 
 from colliflow.modules import _zip_observables
+from colliflow.model import Model
 from colliflow.tensors import Dtype, Shape, SymbolicTensor, Tensor
 
 
@@ -567,6 +568,13 @@ class Server:
         model = model_from_config(line.decode())
         print(model)
 
+        # to_rx will create the observable stream...
+        # but should we do anything before that?
+        # also, are tcp inputs initialized already?
+        # where should those be done?
+        # just write something, I guess:
+        # if model inputs/outputs have same TCP to this server, replace how...?
+
         # separate to_rx and start?
         # do we want to construct graph before start()?
         observables = model.to_rx([])
@@ -598,6 +606,100 @@ class Server:
 
 
 server = Server(host="0.0.0.0", port=5678)
+
+
+# TRANSCRIPTION:
+
+def TcpInput(
+    shape: Shape, dtype: Dtype, sock: Optional[socket.socket]=None
+) -> SymbolicTensor:  # pylint: disable=invalid-name
+    info = TensorInfo(shape=shape, dtype=dtype)
+    module = TcpReceiver([info], sock=sock)
+    x = SymbolicTensor(shape=shape, dtype=dtype, parent=module)
+    x.parent = module
+    return x
+
+
+def create_server_graph():
+    inputs = [TcpInput(shape=(None,), dtype="bytes")]
+    x = inputs[0]
+    x = TcpSender(num_streams=len(inputs), sock=None)(x)
+    outputs = [x]
+    return Model(inputs=inputs, outputs=outputs)
+
+
+def create_client_graph():
+    inputs = [Input(shape=(None,), dtype="bytes")]
+    x = inputs[0]
+    x = TcpServer(
+        addr=("localhost", 5678),
+        graph=create_server_graph(),
+        sock=None,
+    )(x)
+    outputs = [x]
+    return Model(inputs=inputs, outputs=outputs)
+
+
+client_model = create_client_graph()
+frames = rx.from_iterable(["abc", "def", "ghi"])
+outputs = client_model.to_rx(frames)
+outputs[0].subscribe(print)
+
+
+class TcpServer:
+    def forward(self, *inputs):
+        comm_sock = socket(self.addr)
+        comm_sock.send(self.graph.serialize())
+        response = comm_sock.recv()
+        sock = socket(response.addr)
+        self.tcp_sender = TcpSender(num_streams=len(inputs), sock=sock)
+        self.tcp_receiver = TcpReceiver(stream_infos=stream_infos, sock=sock)
+        self.tcp_sender.to_rx(*inputs)
+        outputs = self.tcp_receiver.to_rx()
+        response = comm_sock.recv()
+        if not response.is_ok:
+            raise RuntimeError("Server could not set up graph.")
+        return outputs
+
+
+class Server:
+    async def client_handler(self, reader: StreamReader, writer: StreamWriter):
+        line = await reader.readline()
+        model: Model = model_from_config(line.decode())
+        for module in model.modules:
+            if hasattr(module, "sock"):
+                writer.write(module_id, module.sock.addr)
+        await writer.drain()
+        # NOTE race condition: client may connect before server listens
+        model.setup()
+        model.to_rx()
+        writer.write("ready")
+        await writer.drain()
+
+# class TcpReceiver:
+#     def _sender(self):
+#         if is_server_socket ...
+
+def module_from_config(config: JsonDict):
+    module_type = Module.name_to_module[config[name]]
+    return module_type.from_config(config)
+
+class Module:
+    @staticmethod
+    def from_config(config: JsonDict):
+        kwargs = ...
+        module = module_type(**kwargs)
+        return module
+
+class TcpReceiver:
+    @staticmethod
+    def from_config(config: JsonDict):
+        config = dict(config)
+        sock = socket("0.0.0.0", 0)
+        config["inner_config"]["sock"] = sock  # inner_config?
+        return super().from_config(config)
+
+
 
 
 # TODO rewrite Model.to_rx
