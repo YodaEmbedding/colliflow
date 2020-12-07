@@ -1,7 +1,13 @@
-from typing import Sequence, Tuple
+from dataclasses import dataclass
+from typing import Tuple
 
-Shape = Sequence[int]
-Dtype = str
+from colliflow.typing import Dtype, Shape
+
+
+@dataclass
+class TensorInfo:
+    dtype: Dtype
+    shape: Shape
 
 
 class Tensor:  # pylint: disable=too-few-public-methods
@@ -39,4 +45,5 @@ __all__ = [
     "Shape",
     "SymbolicTensor",
     "Tensor",
+    "TensorInfo",
 ]

@@ -1,8 +1,9 @@
+import asyncio
 import json
 from collections import abc
 from queue import Queue
 from typing import (
-    Any,
+    AsyncIterator,
     Callable,
     Dict,
     Iterable,
@@ -17,13 +18,18 @@ from typing import (
 )
 
 import rx
+from rx import operators as ops
+from rx.core.notification import OnError, OnNext
+from rx.scheduler import ThreadPoolScheduler
+from rx.scheduler.eventloop import AsyncIOScheduler
 
-from colliflow.modules import InputLayer, InputModule, Module
+from colliflow.modules.input import InputModule
+from colliflow.modules.module import InputAsyncModule, Module
 from colliflow.tensors import SymbolicTensor, Tensor
+from colliflow.typing import JsonDict
 
 T = TypeVar("T")
 MaybeSequence = Union[T, Sequence[T]]
-JsonDict = Dict[str, Any]
 
 
 def _coerce_sequence_type(x: MaybeSequence[T], t: Type[T]) -> Sequence[T]:
@@ -75,6 +81,18 @@ class Model:
         left_col = max(len(p) for p, _ in rows)
         return "\n".join(f"{p:{left_col}}  {m}" for p, m in rows)
 
+    async def setup(self, loop: asyncio.AbstractEventLoop) -> AsyncIterator:
+        """Sets up modules and yields their results."""
+        io_scheduler = ThreadPoolScheduler()
+        observables = [
+            rx.from_callable(
+                lambda module=module, i=i: (i, module.setup())
+            ).pipe(ops.observe_on(io_scheduler))
+            for i, module in enumerate(self.modules)
+        ]
+        observable = rx.from_iterable(observables).pipe(ops.merge_all())
+        return _rx_to_async_iter(observable, loop=loop)
+
     def to_rx(
         self, *inputs: MaybeSequence[rx.Observable]
     ) -> List[rx.Observable]:
@@ -85,7 +103,7 @@ class Model:
         and/or observer. Observable modules produce a stream of tensors;
         observers consume streams of tensors.
         """
-        func = lambda module, xs: module.forward_rx(*xs)
+        func = lambda module, xs: module.to_rx(*xs)
         xs = [_coerce_sequence_type(x, rx.Observable) for x in inputs]
         return self._forward_graph(xs, func)
 
@@ -200,8 +218,7 @@ def _deserialize_dict(model_config: List[JsonDict]) -> Model:
 
     # Initialize fringe with input modules
     for node_cfg in model_config:
-        module_type = Module.name_to_module[node_cfg["name"]]
-        if issubclass(module_type, InputModule):
+        if _is_input(node_cfg):
             node_id = node_cfg["id"]
             fringe.put(node_id)
             discovered.add(node_id)
@@ -211,8 +228,7 @@ def _deserialize_dict(model_config: List[JsonDict]) -> Model:
     while not fringe.empty():
         node_id = fringe.get()
         node_cfg = node_configs[node_id]
-        module_type = Module.name_to_module[node_cfg["name"]]
-        is_input = issubclass(module_type, InputModule)
+        is_input = _is_input(node_cfg)
         is_output = len(node_cfg["outputs"]) == 0
         ready = is_input or all(x in outputs for x in node_cfg["inputs"])
 
@@ -238,6 +254,11 @@ def _deserialize_dict(model_config: List[JsonDict]) -> Model:
             model_outputs.append(outputs[node_id])
 
     return Model(inputs=model_inputs, outputs=model_outputs)
+
+
+def _is_input(node_cfg: JsonDict):
+    module_type = Module.name_to_module[node_cfg["name"]]
+    return issubclass(module_type, (InputModule, InputAsyncModule))
 
 
 def _create_and_init_module(
@@ -310,6 +331,31 @@ def _output_visiting_order(
         yield from _output_visiting_order(node, input_nodes)
 
     yield output_node
+
+
+async def _rx_to_async_iter(
+    observable: rx.Observable, loop: asyncio.AbstractEventLoop
+) -> AsyncIterator:
+    queue = asyncio.Queue()
+
+    def on_next(x):
+        queue.put_nowait(x)
+
+    disposable = observable.pipe(ops.materialize()).subscribe(
+        on_next=on_next, scheduler=AsyncIOScheduler(loop=loop)
+    )
+
+    while True:
+        x = await queue.get()
+        if isinstance(x, OnNext):
+            yield x.value
+            queue.task_done()
+        elif isinstance(x, OnError):
+            disposable.dispose()
+            raise RuntimeError(x.value)
+        else:
+            disposable.dispose()
+            break
 
 
 __all__ = [
