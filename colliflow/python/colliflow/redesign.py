@@ -6,15 +6,28 @@ import json
 import socket
 from asyncio import StreamReader, StreamWriter
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, cast
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    cast,
+)
 
 import numpy as np
 import rx
 import rx.subject
 from rx import operators as ops
+from rx.core.notification import OnError, OnNext
+from rx.scheduler import ThreadPoolScheduler
+from rx.scheduler.eventloop import AsyncIOScheduler
 
-from colliflow.modules import _zip_observables
 from colliflow.model import Model
+from colliflow.modules import _zip_observables
 from colliflow.tensors import Dtype, Shape, SymbolicTensor, Tensor
 
 
@@ -107,8 +120,8 @@ class Module(Node):
             "inputs": [node_lut.get(x, None) for x in self.input_nodes],
             "outputs": [node_lut.get(x, None) for x in self.output_nodes],
             "tensor_inputs": [
-                (shape, dtype) for shape, dtype in
-                zip(self.input_shapes, self.input_dtypes)
+                (shape, dtype)
+                for shape, dtype in zip(self.input_shapes, self.input_dtypes)
             ],
             "config": self.inner_config(),
         }
@@ -300,7 +313,7 @@ class TcpSocketStreamReader:
     def readint(self, num_bytes: int = 4):
         return int.from_bytes(self.readexactly(num_bytes), byteorder="big")
 
-    def readjson(self):
+    def readjsonfixed(self) -> JsonDict:
         length = self.readint(4)
         msg = self.readexactly(length)
         return json.loads(msg.decode())
@@ -315,6 +328,11 @@ class TcpSocketStreamWriter:
 
     def writeint(self, num: int, num_bytes: int = 4):
         data = num.to_bytes(num_bytes, byteorder="big")
+        self.write(data)
+
+    def writejsonfixed(self, d: JsonDict):
+        data = json.dumps(d).encode()
+        self.writeint(len(data))
         self.write(data)
 
 
@@ -537,7 +555,7 @@ class TcpServer(ForwardAsyncModule):
         reader = TcpSocketStreamReader(self._comm_socket)
         writer = TcpSocketStreamWriter(self._comm_socket)
         writer.write(msg)
-        d = reader.readjson()
+        d = reader.readjsonfixed()
         if d["status"] != "ready":
             raise Exception("Server could not be initialized with subgraph.")
         host = self._addr[0]
@@ -610,8 +628,9 @@ server = Server(host="0.0.0.0", port=5678)
 
 # TRANSCRIPTION:
 
+
 def TcpInput(
-    shape: Shape, dtype: Dtype, sock: Optional[socket.socket]=None
+    shape: Shape, dtype: Dtype, sock: Optional[socket.socket] = None
 ) -> SymbolicTensor:  # pylint: disable=invalid-name
     info = TensorInfo(shape=shape, dtype=dtype)
     module = TcpReceiver([info], sock=sock)
@@ -647,59 +666,127 @@ outputs[0].subscribe(print)
 
 
 class TcpServer:
-    def forward(self, *inputs):
-        comm_sock = socket(self.addr)
-        comm_sock.send(self.graph.serialize())
-        response = comm_sock.recv()
-        sock = socket(response.addr)
-        self.tcp_sender = TcpSender(num_streams=len(inputs), sock=sock)
-        self.tcp_receiver = TcpReceiver(stream_infos=stream_infos, sock=sock)
-        self.tcp_sender.to_rx(*inputs)
-        outputs = self.tcp_receiver.to_rx()
-        response = comm_sock.recv()
-        if not response.is_ok:
-            raise RuntimeError("Server could not set up graph.")
+    def forward(self, *inputs: rx.Observable):
+        stream_infos = [
+            TensorInfo(shape=t.shape, dtype=t.dtype) for t in self.input_nodes
+        ]
+
+        comm_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        comm_sock.connect(self._addr)
+        comm_writer = TcpSocketStreamWriter(comm_sock)
+        comm_reader = TcpSocketStreamReader(comm_sock)
+        line = (self._graph.serialize() + "\n").encode()
+        comm_writer.write(line)
+
+        for _ in range(len(self._graph.modules)):
+            response = comm_reader.readjsonfixed()
+            module_id = response["module_id"]
+            module = self._graph.modules[module_id]
+
+            # TODO somewhat ad hoc and not very robust
+            if isinstance(module, (TcpReceiver, TcpSender)):
+                # Connect to server at random port specified by server
+                host, _ = self._addr
+                port = response["result"]["port"]
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.connect((host, port))
+
+                # Server's TcpReceiver connects to client's TcpSender,
+                # and vice versa
+                if isinstance(module, TcpReceiver):
+                    self._sender = TcpSender(
+                        num_streams=len(inputs), sock=sock
+                    )
+                else:
+                    self._receiver = TcpReceiver(
+                        stream_infos=stream_infos, sock=sock
+                    )
+
+        comm_sock.close()
+
+        assert self._sender is not None
+        assert self._receiver is not None
+
+        self._sender.to_rx(*inputs)
+        outputs = self._receiver.to_rx()
+
         return outputs
+
+
+async def rx_to_async_iter(
+    observable: rx.Observable, loop: asyncio.AbstractEventLoop
+) -> AsyncIterator:
+    queue = asyncio.Queue()
+
+    def on_next(x):
+        queue.put_nowait(x)
+
+    disposable = observable.pipe(ops.materialize()).subscribe(
+        on_next=on_next, scheduler=AsyncIOScheduler(loop=loop)
+    )
+
+    while True:
+        x = await queue.get()
+        if isinstance(x, OnNext):
+            yield x.value
+            queue.task_done()
+        elif isinstance(x, OnError):
+            disposable.dispose()
+            raise (RuntimeError(x.value))
+        else:
+            disposable.dispose()
+            break
+
+
+class Model:
+    async def setup(self, loop: asyncio.AbstractEventLoop) -> AsyncIterator:
+        """Sets up modules and yields their results."""
+        io_scheduler = ThreadPoolScheduler()
+        observables = [
+            rx.from_callable(lambda module=module: (i, module.setup())).pipe(
+                ops.observe_on(io_scheduler)
+            )
+            for i, module in enumerate(self.modules)
+        ]
+        observable = rx.from_iterable(observables).pipe(ops.merge_all())
+        return rx_to_async_iter(observable, loop=loop)
 
 
 class Server:
     async def client_handler(self, reader: StreamReader, writer: StreamWriter):
+        """Receives collaborative graph from client and sets it up."""
         line = await reader.readline()
-        model: Model = model_from_config(line.decode())
-        for module in model.modules:
-            if hasattr(module, "sock"):
-                writer.write(module_id, module.sock.addr)
-        await writer.drain()
-        # NOTE race condition: client may connect before server listens
-        model.setup()
+        model = Model.deserialize(line.decode())
+        await self.model_setup(model, writer)
         model.to_rx()
-        writer.write("ready")
-        await writer.drain()
 
+    async def model_setup(self, model: Model, writer: StreamWriter):
+        async for module_id, result in model.setup():
+            d = {"module_id": module_id, "result": result}
+            writer.write(f"{json.dumps(d)}\n".encode())
+            await writer.drain()
+
+
+# def module_from_config(config: JsonDict):
+#     module_type = Module.name_to_module[config[name]]
+#     return module_type.from_config(config)
+#
+#
+# class Module:
+#     @staticmethod
+#     def from_config(config: JsonDict):
+#         kwargs = ...
+#         module = module_type(**kwargs)
+#         return module
+#
+#
 # class TcpReceiver:
-#     def _sender(self):
-#         if is_server_socket ...
-
-def module_from_config(config: JsonDict):
-    module_type = Module.name_to_module[config[name]]
-    return module_type.from_config(config)
-
-class Module:
-    @staticmethod
-    def from_config(config: JsonDict):
-        kwargs = ...
-        module = module_type(**kwargs)
-        return module
-
-class TcpReceiver:
-    @staticmethod
-    def from_config(config: JsonDict):
-        config = dict(config)
-        sock = socket("0.0.0.0", 0)
-        config["inner_config"]["sock"] = sock  # inner_config?
-        return super().from_config(config)
-
-
+#     @staticmethod
+#     def from_config(config: JsonDict):
+#         config = dict(config)
+#         sock = socket("0.0.0.0", 0)
+#         config["inner_config"]["sock"] = sock  # inner_config?
+#         return super().from_config(config)
 
 
 # TODO rewrite Model.to_rx
@@ -714,6 +801,7 @@ class TcpReceiver:
 # TODO rate controls,  CONTIGUOUS_INTERVAL = 50ms  (computed from upload BW)
 # TODO bi-directional time/rate sync
 
+# TODO module.unique_id for subgraph modules across network; see Model.setup()
 # TODO props hook for defining module output_shapes/dtypes at runtime
 # TODO module multi-output
 # TODO "composable" hierarchical modules?
