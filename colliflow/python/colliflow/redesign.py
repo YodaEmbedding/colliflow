@@ -452,26 +452,27 @@ class TcpTensorOutputStream:
 
 class TcpReceiver(InputAsyncModule):
     def __init__(self, stream_infos: List[TensorInfo], sock: socket.socket):
-        self._socket = sock
+        self._sock = sock
         self._infos = stream_infos
         self._num_streams = len(self._infos)
         self._stream: Optional[TcpTensorInputStream] = None
 
-    def start(self):
-        stream_reader = TcpSocketStreamReader(self._socket)
-        self._stream = TcpTensorInputStream(stream_reader, self._infos)
-        self._network_reader = rx.from_iterable(self._reader()).pipe(
-            ops.share(),
-        )
-
     def produce(self) -> List[rx.Observable]:
+        self._create_network_reader()
         return [
             self._network_reader.pipe(
-                ops.filter(lambda x: x[0] == i),
+                ops.filter(lambda x, i=i: x[0] == i),
                 ops.map(lambda x: x[1]),
             )
             for i in range(self._num_streams)
         ]
+
+    def _create_network_reader(self):
+        stream_reader = TcpSocketStreamReader(self._sock)
+        self._stream = TcpTensorInputStream(stream_reader, self._infos)
+        self._network_reader = rx.from_iterable(self._reader()).pipe(
+            ops.share(),
+        )
 
     def _reader(self):
         while True:
@@ -480,23 +481,24 @@ class TcpReceiver(InputAsyncModule):
 
 class TcpSender(OutputAsyncModule):
     def __init__(self, num_streams: int, sock: socket.socket):
-        self._socket = sock
+        self._sock = sock
         self._num_streams = num_streams
         self._stream: Optional[TcpTensorOutputStream] = None
 
-    def start(self):
-        stream_writer = TcpSocketStreamWriter(self._socket)
-        self._stream = TcpTensorOutputStream(stream_writer, self._num_streams)
-        message_requests = rx.from_iterable(self._sender())
-        message_requests.subscribe(self._send_message)
-
     def consume(self, *inputs: rx.Observable):
+        self._create_network_writer()
         indexed_inputs = [
             obs.pipe(ops.map(lambda x, i=i: (i, x)))
             for i, obs in enumerate(inputs)
         ]
         zipped = rx.zip(*indexed_inputs)
         zipped.subscribe(self._writer)
+
+    def _create_network_writer(self):
+        stream_writer = TcpSocketStreamWriter(self._sock)
+        self._stream = TcpTensorOutputStream(stream_writer, self._num_streams)
+        message_requests = rx.from_iterable(self._sender())
+        message_requests.subscribe(self._send_message)
 
     def _writer(self, tensor_pair: Tuple[int, Tensor]):
         stream_id, tensor = tensor_pair
@@ -515,47 +517,64 @@ class TcpSender(OutputAsyncModule):
 
 
 class TcpServer(ForwardAsyncModule):
-    def __init__(
-        self, addr: Tuple[str, int], graph: Graph, sock: socket.socket
-    ):
+    def __init__(self, addr: Tuple[str, int], graph: Model):
         self._addr = addr
         self._graph = graph
-        self._comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sender: Optional[TcpSender] = None
         self._receiver: Optional[TcpReceiver] = None
+        self._input_stream_infos = [
+            TensorInfo(shape=shape, dtype=dtype)
+            for shape, dtype in zip(self.input_shapes, self.input_dtypes)
+        ]
+        self._output_stream_infos = [
+            TensorInfo(shape=shape, dtype=dtype)
+            for shape, dtype in zip(self.output_shapes, self.output_dtypes)
+        ]
 
-    def start(self):
-        self._establish_conn()
-        # TODO plug socket into sender/receiver... can probably do in forward()
-        self._sender.start()
-        self._receiver.start()
+    def forward(self, *inputs: rx.Observable) -> rx.Observable:
+        comm_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        comm_sock.connect(self._addr)
+        comm_writer = TcpSocketStreamWriter(comm_sock)
+        comm_reader = TcpSocketStreamReader(comm_sock)
+        line = (self._graph.serialize() + "\n").encode()
+        comm_writer.write(line)
 
-    # NOTE forward is only used to provide information to set up observables?
-    def forward(self, *inputs: rx.Observable) -> List[rx.Observable]:
-        num_inputs = len(inputs)
-        # output_infos = []
+        for _ in range(len(self._graph.modules)):
+            response = comm_reader.readjsonfixed()
+            self._handle_setup_response(response)
 
-        self._sender = TcpSender(num_inputs, self._comm_socket)
-        self._receiver = TcpReceiver(output_infos, self._comm_socket)
+        comm_sock.close()
 
-        self._sender.consume(*inputs)
-        outputs = self._receiver.produce()
+        assert self._sender is not None
+        assert self._receiver is not None
+
+        self._sender.to_rx(*inputs)
+        outputs = self._receiver.to_rx()
 
         return outputs
 
-    def _establish_conn(self):
-        self._comm_socket.connect(self._addr)
-        msg = self._graph.serialize().encode()
-        reader = TcpSocketStreamReader(self._comm_socket)
-        writer = TcpSocketStreamWriter(self._comm_socket)
-        writer.write(msg)
-        d = reader.readjsonfixed()
-        if d["status"] != "ready":
-            raise Exception("Server could not be initialized with subgraph.")
-        host = self._addr[0]
-        port = d["port"]
-        self._socket.connect((host, port))
+    def _handle_setup_response(self, response: JsonDict):
+        module_id = response["module_id"]
+        module = self._graph.modules[module_id]
+
+        # TODO somewhat ad hoc and not very robust
+        if isinstance(module, (TcpReceiver, TcpSender)):
+            # Connect to server at random port specified by server
+            host, _ = self._addr
+            port = response["result"]["port"]
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((host, port))
+
+            # Server's TcpReceiver connects to client's TcpSender,
+            # and vice versa
+            if isinstance(module, TcpReceiver):
+                self._sender = TcpSender(
+                    num_streams=len(self._input_stream_infos), sock=sock
+                )
+            else:
+                self._receiver = TcpReceiver(
+                    stream_infos=self._output_stream_infos, sock=sock
+                )
 
 
 class Server:
@@ -573,55 +592,36 @@ class Server:
         await server.serve_forever()
 
     async def client_handler(self, reader: StreamReader, writer: StreamWriter):
+        """Receives collaborative graph from client and sets it up."""
         print("New client...")
         ip, port = writer.get_extra_info("peername")
         print(f"Connected to {ip}:{port}")
 
         line = await reader.readline()
-        model = model_from_config(line.decode())
+        model = Model.deserialize(line.decode())
         print(model)
+        await self._model_setup(model, writer)
+        model.to_rx()
 
-        # to_rx will create the observable stream...
-        # but should we do anything before that?
-        # also, are tcp inputs initialized already?
-        # where should those be done?
-        # just write something, I guess:
-        # if model inputs/outputs have same TCP to this server, replace how...?
-
-        # separate to_rx and start?
-        # do we want to construct graph before start()?
-        observables = model.to_rx([])
-
-        observable = observables[0]
-        observable.subscribe()  # on which thread?
-        print("subscribed to first observable")
-
-        # which sock? where is this used?
-        # specify UDP in, TCP out? modules should handle it
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind((self._host, 0))
-        port: int = sock.getsockname()[1]
-
-        # isn't this blocking?
-        sock.listen(1)
-
-        response_dict = {"status": "ready", "port": port}
-        response = json.dumps(response_dict) + "\n"
-        writer.write(response.encode())
-        await writer.drain()
-
-        # start()/accept() on DIFFERENT thread to avoid blocking
-        # only begin to recv after sock.accept
-        conn, addr = sock.accept()
-
-        model.set_sock(sock)
-        observables = model.start()
+    async def _model_setup(self, model: Model, writer: StreamWriter):
+        async for module_id, result in model.setup():
+            response_dict = {"module_id": module_id, "result": result}
+            writer.write(f"{json.dumps(response_dict)}\n".encode())
+            await writer.drain()
 
 
 server = Server(host="0.0.0.0", port=5678)
 
 
 # TRANSCRIPTION:
+
+# TODO these still need to be put in their correct places:
+#
+# sock.bind((self._host, 0))
+# port: int = sock.getsockname()[1]
+#
+# sock.listen(1)
+# conn, addr = sock.accept()
 
 
 def TcpInput(
@@ -648,7 +648,6 @@ def create_client_graph():
     x = TcpServer(
         addr=("localhost", 5678),
         graph=create_server_graph(),
-        sock=None,
     )(x)
     outputs = [x]
     return Model(inputs=inputs, outputs=outputs)
@@ -658,54 +657,6 @@ client_model = create_client_graph()
 frames = rx.from_iterable(["abc", "def", "ghi"])
 outputs = client_model.to_rx(frames)
 outputs[0].subscribe(print)
-
-
-class TcpServer:
-    def forward(self, *inputs: rx.Observable):
-        stream_infos = [
-            TensorInfo(shape=t.shape, dtype=t.dtype) for t in self.input_nodes
-        ]
-
-        comm_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        comm_sock.connect(self._addr)
-        comm_writer = TcpSocketStreamWriter(comm_sock)
-        comm_reader = TcpSocketStreamReader(comm_sock)
-        line = (self._graph.serialize() + "\n").encode()
-        comm_writer.write(line)
-
-        for _ in range(len(self._graph.modules)):
-            response = comm_reader.readjsonfixed()
-            module_id = response["module_id"]
-            module = self._graph.modules[module_id]
-
-            # TODO somewhat ad hoc and not very robust
-            if isinstance(module, (TcpReceiver, TcpSender)):
-                # Connect to server at random port specified by server
-                host, _ = self._addr
-                port = response["result"]["port"]
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.connect((host, port))
-
-                # Server's TcpReceiver connects to client's TcpSender,
-                # and vice versa
-                if isinstance(module, TcpReceiver):
-                    self._sender = TcpSender(
-                        num_streams=len(inputs), sock=sock
-                    )
-                else:
-                    self._receiver = TcpReceiver(
-                        stream_infos=stream_infos, sock=sock
-                    )
-
-        comm_sock.close()
-
-        assert self._sender is not None
-        assert self._receiver is not None
-
-        self._sender.to_rx(*inputs)
-        outputs = self._receiver.to_rx()
-
-        return outputs
 
 
 async def rx_to_async_iter(
@@ -727,7 +678,7 @@ async def rx_to_async_iter(
             queue.task_done()
         elif isinstance(x, OnError):
             disposable.dispose()
-            raise (RuntimeError(x.value))
+            raise RuntimeError(x.value)
         else:
             disposable.dispose()
             break
@@ -746,20 +697,6 @@ class Model:
         observable = rx.from_iterable(observables).pipe(ops.merge_all())
         return rx_to_async_iter(observable, loop=loop)
 
-
-class Server:
-    async def client_handler(self, reader: StreamReader, writer: StreamWriter):
-        """Receives collaborative graph from client and sets it up."""
-        line = await reader.readline()
-        model = Model.deserialize(line.decode())
-        await self.model_setup(model, writer)
-        model.to_rx()
-
-    async def model_setup(self, model: Model, writer: StreamWriter):
-        async for module_id, result in model.setup():
-            d = {"module_id": module_id, "result": result}
-            writer.write(f"{json.dumps(d)}\n".encode())
-            await writer.drain()
 
 
 # TODO rewrite Model.to_rx
