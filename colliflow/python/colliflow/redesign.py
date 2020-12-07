@@ -452,14 +452,12 @@ class TcpTensorOutputStream:
 
 class TcpReceiver(InputAsyncModule):
     def __init__(self, stream_infos: List[TensorInfo], sock: socket.socket):
-        # self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket = sock
         self._infos = stream_infos
         self._num_streams = len(self._infos)
         self._stream: Optional[TcpTensorInputStream] = None
 
     def start(self):
-        # self._socket.connect()
         stream_reader = TcpSocketStreamReader(self._socket)
         self._stream = TcpTensorInputStream(stream_reader, self._infos)
         self._network_reader = rx.from_iterable(self._reader()).pipe(
@@ -481,15 +479,12 @@ class TcpReceiver(InputAsyncModule):
 
 
 class TcpSender(OutputAsyncModule):
-    # TODO ensure that socket is NOT added to the serialization params
     def __init__(self, num_streams: int, sock: socket.socket):
-        # self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket = sock
         self._num_streams = num_streams
         self._stream: Optional[TcpTensorOutputStream] = None
 
     def start(self):
-        # self._socket.connect()
         stream_writer = TcpSocketStreamWriter(self._socket)
         self._stream = TcpTensorOutputStream(stream_writer, self._num_streams)
         message_requests = rx.from_iterable(self._sender())
@@ -497,8 +492,8 @@ class TcpSender(OutputAsyncModule):
 
     def consume(self, *inputs: rx.Observable):
         indexed_inputs = [
-            x.pipe(ops.map(lambda x, i=i: (i, x)))
-            for i, x in enumerate(inputs)
+            obs.pipe(ops.map(lambda x, i=i: (i, x)))
+            for i, obs in enumerate(inputs)
         ]
         zipped = rx.zip(*indexed_inputs)
         zipped.subscribe(self._writer)
@@ -765,28 +760,6 @@ class Server:
             d = {"module_id": module_id, "result": result}
             writer.write(f"{json.dumps(d)}\n".encode())
             await writer.drain()
-
-
-# def module_from_config(config: JsonDict):
-#     module_type = Module.name_to_module[config[name]]
-#     return module_type.from_config(config)
-#
-#
-# class Module:
-#     @staticmethod
-#     def from_config(config: JsonDict):
-#         kwargs = ...
-#         module = module_type(**kwargs)
-#         return module
-#
-#
-# class TcpReceiver:
-#     @staticmethod
-#     def from_config(config: JsonDict):
-#         config = dict(config)
-#         sock = socket("0.0.0.0", 0)
-#         config["inner_config"]["sock"] = sock  # inner_config?
-#         return super().from_config(config)
 
 
 # TODO rewrite Model.to_rx
