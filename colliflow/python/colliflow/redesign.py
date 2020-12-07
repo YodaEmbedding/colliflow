@@ -100,6 +100,17 @@ class Module(Node):
         """Override this to serialize custom module parameters."""
         raise NotImplementedError
 
+    def setup(self) -> Any:
+        """Override this to run prior to observable graph construction.
+
+        Though users may override this method with synchronous code,
+        the setup will occur in parallel on various threads.
+        This method should try to contain only IO-bound actions.
+
+        May return a result indicating success/failure.
+        """
+        return None
+
     def to_rx(self, *inputs: rx.Observable) -> rx.Observable:
         """Produces output observable from input observables.
 
@@ -479,6 +490,29 @@ class TcpReceiver(InputAsyncModule):
             yield self._stream.read_tensor()
 
 
+class ClientTcpReceiver(TcpReceiver):
+    pass
+
+
+class ServerTcpReceiver(TcpReceiver):
+    def setup(self) -> JsonDict:
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.bind(("0.0.0.0", 0))
+        port: int = self._sock.getsockname()[1]
+
+        # NOTE very tiny race condition till observable start
+        io_scheduler = ThreadPoolScheduler()
+        rx.from_callable(self._get_conn).subscribe(scheduler=io_scheduler)
+
+        return {"port": port}
+
+    def _get_conn(self):
+        self._sock.listen(1)
+        conn, _ = self._sock.accept()
+        self._sock = conn
+        # TODO send a setup() result indicating success after connection, too
+
+
 class TcpSender(OutputAsyncModule):
     def __init__(self, num_streams: int, sock: socket.socket):
         self._sock = sock
@@ -516,12 +550,35 @@ class TcpSender(OutputAsyncModule):
         self._stream.send_message(stream_id, length)
 
 
+class ClientTcpSender(TcpSender):
+    pass
+
+
+class ServerTcpSender(TcpSender):
+    def setup(self) -> JsonDict:
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.bind(("0.0.0.0", 0))
+        port: int = self._sock.getsockname()[1]
+
+        # NOTE very tiny race condition till observable start
+        io_scheduler = ThreadPoolScheduler()
+        rx.from_callable(self._get_conn).subscribe(scheduler=io_scheduler)
+
+        return {"port": port}
+
+    def _get_conn(self):
+        self._sock.listen(1)
+        conn, _ = self._sock.accept()
+        self._sock = conn
+        # TODO send a setup() result indicating success after connection, too
+
+
 class TcpServer(ForwardAsyncModule):
     def __init__(self, addr: Tuple[str, int], graph: Model):
         self._addr = addr
         self._graph = graph
-        self._sender: Optional[TcpSender] = None
-        self._receiver: Optional[TcpReceiver] = None
+        self._sender: Optional[ClientTcpSender] = None
+        self._receiver: Optional[ClientTcpReceiver] = None
         self._input_stream_infos = [
             TensorInfo(shape=shape, dtype=dtype)
             for shape, dtype in zip(self.input_shapes, self.input_dtypes)
@@ -558,7 +615,7 @@ class TcpServer(ForwardAsyncModule):
         module = self._graph.modules[module_id]
 
         # TODO somewhat ad hoc and not very robust
-        if isinstance(module, (TcpReceiver, TcpSender)):
+        if isinstance(module, (ServerTcpReceiver, ServerTcpSender)):
             # Connect to server at random port specified by server
             host, _ = self._addr
             port = response["result"]["port"]
@@ -568,11 +625,11 @@ class TcpServer(ForwardAsyncModule):
             # Server's TcpReceiver connects to client's TcpSender,
             # and vice versa
             if isinstance(module, TcpReceiver):
-                self._sender = TcpSender(
+                self._sender = ClientTcpSender(
                     num_streams=len(self._input_stream_infos), sock=sock
                 )
             else:
-                self._receiver = TcpReceiver(
+                self._receiver = ClientTcpReceiver(
                     stream_infos=self._output_stream_infos, sock=sock
                 )
 
@@ -613,31 +670,26 @@ class Server:
 server = Server(host="0.0.0.0", port=5678)
 
 
-# TRANSCRIPTION:
-
-# TODO these still need to be put in their correct places:
-#
-# sock.bind((self._host, 0))
-# port: int = sock.getsockname()[1]
-#
-# sock.listen(1)
-# conn, addr = sock.accept()
-
-
-def TcpInput(
+def ServerTcpInput(
     shape: Shape, dtype: Dtype, sock: Optional[socket.socket] = None
 ) -> SymbolicTensor:  # pylint: disable=invalid-name
     info = TensorInfo(shape=shape, dtype=dtype)
-    module = TcpReceiver([info], sock=sock)
+    module = ServerTcpReceiver([info], sock=sock)
     x = SymbolicTensor(shape=shape, dtype=dtype, parent=module)
     x.parent = module
     return x
 
 
+def ServerTcpOutput(
+    num_streams: int, sock: socket.socket
+) -> ServerTcpSender:  # pylint: disable=invalid-name
+    return ServerTcpSender(num_streams=num_streams, sock=sock)
+
+
 def create_server_graph():
-    inputs = [TcpInput(shape=(None,), dtype="bytes")]
+    inputs = [ServerTcpInput(shape=(None,), dtype="bytes")]
     x = inputs[0]
-    x = TcpSender(num_streams=len(inputs), sock=None)(x)
+    x = ServerTcpOutput(num_streams=len(inputs), sock=None)(x)
     outputs = [x]
     return Model(inputs=inputs, outputs=outputs)
 
@@ -689,14 +741,13 @@ class Model:
         """Sets up modules and yields their results."""
         io_scheduler = ThreadPoolScheduler()
         observables = [
-            rx.from_callable(lambda module=module: (i, module.setup())).pipe(
-                ops.observe_on(io_scheduler)
-            )
+            rx.from_callable(
+                lambda module=module, i=i: (i, module.setup())
+            ).pipe(ops.observe_on(io_scheduler))
             for i, module in enumerate(self.modules)
         ]
         observable = rx.from_iterable(observables).pipe(ops.merge_all())
         return rx_to_async_iter(observable, loop=loop)
-
 
 
 # TODO rewrite Model.to_rx
