@@ -38,12 +38,6 @@ class TensorInfo:
 
 
 JsonDict = Dict[str, Any]
-Graph = "Graph"
-
-# SerializableGraphNode
-# StaticLinkable
-
-# TODO copy over relevant code here... e.g. serialization, observable construction, ...
 
 
 @dataclass
@@ -54,10 +48,6 @@ class Node:
     input_dtypes: List[Dtype] = []
     output_shapes: List[Shape] = []
     output_dtypes: List[Dtype] = []
-
-
-# TODO serialization
-# TODO "to_rx" (done by Model/Graph?) (needs to recognize "input" modules)
 
 
 class Module(Node):
@@ -462,6 +452,8 @@ class TcpTensorOutputStream:
 
 
 class TcpReceiver(InputAsyncModule):
+    name = "__AbstractModule"
+
     def __init__(self, stream_infos: List[TensorInfo], sock: socket.socket):
         self._sock = sock
         self._infos = stream_infos
@@ -491,10 +483,12 @@ class TcpReceiver(InputAsyncModule):
 
 
 class ClientTcpReceiver(TcpReceiver):
-    pass
+    name = "ClientTcpReceiver"
 
 
 class ServerTcpReceiver(TcpReceiver):
+    name = "ServerTcpReceiver"
+
     def setup(self) -> JsonDict:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.bind(("0.0.0.0", 0))
@@ -514,6 +508,8 @@ class ServerTcpReceiver(TcpReceiver):
 
 
 class TcpSender(OutputAsyncModule):
+    name = "__AbstractModule"
+
     def __init__(self, num_streams: int, sock: socket.socket):
         self._sock = sock
         self._num_streams = num_streams
@@ -551,10 +547,12 @@ class TcpSender(OutputAsyncModule):
 
 
 class ClientTcpSender(TcpSender):
-    pass
+    name = "ClientTcpSender"
 
 
 class ServerTcpSender(TcpSender):
+    name = "ServerTcpSender"
+
     def setup(self) -> JsonDict:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.bind(("0.0.0.0", 0))
@@ -573,7 +571,9 @@ class ServerTcpSender(TcpSender):
         # TODO send a setup() result indicating success after connection, too
 
 
-class TcpServer(ForwardAsyncModule):
+class ClientTcpServerSubgraph(ForwardAsyncModule):
+    name = "ClientTcpServerSubgraph"
+
     def __init__(self, addr: Tuple[str, int], graph: Model):
         self._addr = addr
         self._graph = graph
@@ -644,7 +644,7 @@ class Server:
 
     async def start_async(self):
         server = await asyncio.start_server(
-            self.client_handler, self.host, self.port
+            self.client_handler, self._host, self._port
         )
         await server.serve_forever()
 
@@ -697,7 +697,7 @@ def create_server_graph():
 def create_client_graph():
     inputs = [Input(shape=(None,), dtype="bytes")]
     x = inputs[0]
-    x = TcpServer(
+    x = ClientTcpServerSubgraph(
         addr=("localhost", 5678),
         graph=create_server_graph(),
     )(x)
