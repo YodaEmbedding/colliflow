@@ -81,7 +81,7 @@ class Model:
         left_col = max(len(p) for p, _ in rows)
         return "\n".join(f"{p:{left_col}}  {m}" for p, m in rows)
 
-    async def setup(self, loop: asyncio.AbstractEventLoop) -> AsyncIterator:
+    async def setup(self) -> AsyncIterator:
         """Sets up modules and yields their results."""
         io_scheduler = ThreadPoolScheduler()
         observables = [
@@ -91,7 +91,8 @@ class Model:
             for i, module in enumerate(self.modules)
         ]
         observable = rx.from_iterable(observables).pipe(ops.merge_all())
-        return _rx_to_async_iter(observable, loop=loop)
+        async for result_pair in _rx_to_async_iter(observable):
+            yield result_pair
 
     def to_rx(
         self, *inputs: MaybeSequence[rx.Observable]
@@ -333,10 +334,9 @@ def _output_visiting_order(
     yield output_node
 
 
-async def _rx_to_async_iter(
-    observable: rx.Observable, loop: asyncio.AbstractEventLoop
-) -> AsyncIterator:
+async def _rx_to_async_iter(observable: rx.Observable) -> AsyncIterator:
     queue = asyncio.Queue()
+    loop = asyncio.get_event_loop()
 
     def on_next(x):
         queue.put_nowait(x)
