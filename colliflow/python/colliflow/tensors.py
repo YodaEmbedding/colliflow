@@ -1,13 +1,24 @@
-from dataclasses import dataclass
-from typing import Tuple
+from dataclasses import asdict, dataclass
+from typing import Tuple, Union
 
-from colliflow.typing import Dtype, Shape
+from colliflow.typing import Dtype, JsonDict, Shape
 
 
 @dataclass
 class TensorInfo:
     dtype: Dtype
     shape: Shape
+
+    @staticmethod
+    def from_(x: Union["TensorInfo", JsonDict]):
+        if isinstance(x, TensorInfo):
+            return TensorInfo(**asdict(x))
+        if isinstance(x, dict):
+            return TensorInfo(**x)
+        raise NotImplementedError
+
+    def as_dict(self):
+        return asdict(self)
 
 
 class Tensor:  # pylint: disable=too-few-public-methods

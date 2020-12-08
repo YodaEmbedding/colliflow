@@ -3,6 +3,7 @@ import json
 from asyncio import StreamReader, StreamWriter
 
 from colliflow.model import Model
+from colliflow.tensors import JsonDict
 
 
 class Server:
@@ -29,13 +30,22 @@ class Server:
         model = Model.deserialize(line.decode())
         print(model)
         await self._model_setup(model, writer)
-        model.to_rx()
+        print("model.setup() complete!")
+        model.to_rx([])
+        print("model.to_rx() complete!")
 
     async def _model_setup(self, model: Model, writer: StreamWriter):
         async for module_id, result in model.setup():
             response_dict = {"module_id": module_id, "result": result}
-            writer.write(f"{json.dumps(response_dict)}\n".encode())
-            await writer.drain()
+            print("sending", response_dict)
+            await _writejsonfixed(writer, response_dict)
+
+async def _writejsonfixed(writer: StreamWriter, d: JsonDict):
+    data = f"{json.dumps(d)}\n".encode()
+    length = len(data).to_bytes(4, byteorder="big")
+    writer.write(length)
+    writer.write(data)
+    await writer.drain()
 
 
 __all__ = [

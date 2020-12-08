@@ -148,6 +148,8 @@ class Model:
         output_parents = [x.parent for x in self._outputs]
 
         for module in self.modules:
+            print(module)
+
             if module in input_nodes:
                 continue
 

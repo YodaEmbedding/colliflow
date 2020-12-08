@@ -270,7 +270,10 @@ class InputAsyncModule(Module):
         raise NotImplementedError
 
     def to_rx(self, *inputs: rx.Observable) -> rx.Observable:
-        self._check_num_inputs(len(inputs), check_nodes=True)
+        # NOTE If Module is not attached to graph, do not check len(inputs)
+        # TODO Does it make sense for module to be detached from graph?
+        if self._is_used_in_static_graph:
+            self._check_num_inputs(len(inputs), check_nodes=True)
         return self.produce().pipe(ops.publish())
 
 
@@ -287,7 +290,10 @@ class OutputAsyncModule(Module):
         raise NotImplementedError
 
     def to_rx(self, *inputs: rx.Observable) -> rx.Observable:
-        self._check_num_inputs(len(inputs), check_nodes=True)
+        # NOTE If Module is not attached to graph, do not check len(inputs)
+        # TODO Does it make sense for module to be detached from graph?
+        if self._is_used_in_static_graph:
+            self._check_num_inputs(len(inputs), check_nodes=True)
         self.consume(*inputs)
         # Create dummy observable to satisfy type signature
         return rx.from_iterable([])

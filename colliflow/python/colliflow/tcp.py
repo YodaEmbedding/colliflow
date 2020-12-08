@@ -48,6 +48,7 @@ class TcpSocketStreamReader:
 
     def readjsonfixed(self) -> JsonDict:
         length = self.readint(4)
+        print(length)
         msg = self.readexactly(length)
         return json.loads(msg.decode())
 
@@ -163,8 +164,10 @@ class TcpTensorOutputStream:
         """Send message consisting of length bytes taken from buffer."""
         data = self._buffers[stream_id][:length]
         self._buffers[stream_id] = self._buffers[stream_id][length:]
+        if len(data) == 0:
+            return
         self._writer.writeint(stream_id, num_bytes=1)
-        self._writer.writeint(length)
+        self._writer.writeint(len(data))
         self._writer.write(data)
 
 

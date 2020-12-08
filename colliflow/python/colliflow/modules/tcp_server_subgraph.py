@@ -18,6 +18,18 @@ class ClientTcpServerSubgraph(ForwardAsyncModule):
     name = "ClientTcpServerSubgraph"
 
     def __init__(self, addr: Tuple[str, int], graph: "Model"):
+        # TODO a bit hacky
+        # DEBUG
+        input_shapes = list(graph.modules[0].output_shapes)
+        input_dtypes = list(graph.modules[0].output_dtypes)
+        output_shapes = list(graph.modules[-1].input_shapes)
+        output_dtypes = list(graph.modules[-1].input_dtypes)
+        super().__init__(shape=output_shapes[0], dtype=output_dtypes[0])
+        self.input_shapes = input_shapes
+        self.input_dtypes = input_dtypes
+        self.output_shapes = output_shapes
+        self.output_dtypes = output_dtypes
+
         self._addr = addr
         self._graph = graph
         self._sender: Optional[ClientTcpSender] = None
@@ -31,6 +43,9 @@ class ClientTcpServerSubgraph(ForwardAsyncModule):
             for shape, dtype in zip(self.output_shapes, self.output_dtypes)
         ]
 
+    def inner_config(self):
+        return {"addr": self._addr, "graph": self._graph.serialize()}
+
     def forward(self, *inputs: rx.Observable) -> rx.Observable:
         comm_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         comm_sock.connect(self._addr)
@@ -41,6 +56,7 @@ class ClientTcpServerSubgraph(ForwardAsyncModule):
 
         for _ in range(len(self._graph.modules)):
             response = comm_reader.readjsonfixed()
+            print(response)
             self._handle_setup_response(response)
 
         comm_sock.close()
