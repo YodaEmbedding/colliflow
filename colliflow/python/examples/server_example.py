@@ -1,7 +1,7 @@
 import asyncio
 from asyncio import StreamReader, StreamWriter
 
-from colliflow import Model
+from colliflow import Model, Server
 
 from .shared_modules import *
 
@@ -43,7 +43,9 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # asyncio.run(main())
+    server = Server(IP, PORT)
+    server.start()
 
 
 # TODO

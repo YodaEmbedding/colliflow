@@ -4,7 +4,7 @@ from typing import Tuple, cast
 import rx
 import rx.operators as ops
 
-from colliflow import InputModule, Model, Module, SymbolicTensor, Tensor
+from colliflow import InputAsyncModule, Model, Module, SymbolicTensor, Tensor
 
 epoch = time()
 
@@ -141,13 +141,11 @@ class TcpClient(Module):
 #         return tensor
 
 
-def FakeInput(
-    shape: Tuple[int], dtype: str, scheduler=None
-):  # pylint: disable=invalid-name
-    return FakeInputLayer(shape, dtype, scheduler=scheduler)()
+def FakeInput(shape: Tuple[int], dtype: str):  # pylint: disable=invalid-name
+    return FakeInputLayer(shape, dtype)()
 
 
-class FakeInputLayer(InputModule):
+class FakeInputLayer(InputAsyncModule):
     name = "FakeInput"
 
     def __init__(self, shape: Tuple[int], dtype: str, **kwargs):
@@ -156,18 +154,15 @@ class FakeInputLayer(InputModule):
     def inner_config(self):
         return {"shape": self.shape, "dtype": self.dtype}
 
-    def forward_rx(self):
+    def produce(self):
         frames = rx.interval(1).pipe(
             ops.do_action(lambda x: print(f"\n{get_time():.1f}  Frame {x}\n")),
-            ops.map(lambda _: self.forward()),
+            ops.map(lambda _: Tensor((224, 224, 3), "uint8")),
             ops.publish(),
         )
         frames = cast(rx.core.ConnectableObservable, frames)
         frames.connect()
         return frames
-
-    def forward(self):
-        return Tensor((224, 224, 3), "uint8")
 
 
 def model_from_config(model_config) -> Model:

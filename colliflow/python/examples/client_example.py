@@ -7,8 +7,10 @@ from time import sleep, time
 
 import rx
 from rx import operators as ops
+from rx.scheduler import NewThreadScheduler
 
-from colliflow import Input, Model, Module, SymbolicTensor, Tensor
+from colliflow import Input, Model, Module, SymbolicTensor, Tensor, TensorInfo
+from colliflow.modules import *
 
 from .shared_modules import *
 
@@ -26,17 +28,29 @@ def simple_model():
     client_func = lambda x: Tensor(shape=(14, 14, 512), dtype="uint8")
     server_func = lambda x: Tensor(shape=(1000,), dtype="float32")
 
-    inputs = [Input(shape=(224, 224, 3), dtype="uint8", scheduler="io")]
+    inputs = [
+        Input(
+            shape=(224, 224, 3),
+            dtype="uint8",
+        )
+    ]
 
     x = inputs[0]
-    x = Preprocessor(scheduler="cpu")(x)
+    # x = Preprocessor()(x)
     x = ClientInferenceModel(
-        func=client_func, shape=(14, 14, 512), dtype="uint8", scheduler="cpu"
+        func=client_func,
+        shape=(14, 14, 512),
+        dtype="uint8",
     )(x)
-    x = Postencoder(scheduler="cpu")(x)
-    x = Predecoder(shape=(14, 14, 512), dtype="uint8", scheduler="cpu")(x)
+    x = Postencoder()(x)
+    x = Predecoder(
+        shape=(14, 14, 512),
+        dtype="uint8",
+    )(x)
     x = ServerInferenceModel(  #
-        func=server_func, shape=(1000,), dtype="float32", scheduler="cpu"
+        func=server_func,
+        shape=(1000,),
+        dtype="float32",
     )(x)
 
     outputs = [x]
@@ -48,17 +62,29 @@ def server_model():
     client_func = lambda x: Tensor(shape=(14, 14, 512), dtype="uint8")
     server_func = lambda x: Tensor(shape=(1000,), dtype="float32")
 
-    inputs = [FakeInput(shape=(224, 224, 3), dtype="uint8", scheduler="io")]
+    inputs = [
+        FakeInput(
+            shape=(224, 224, 3),
+            dtype="uint8",
+        )
+    ]
 
     x = inputs[0]
-    x = Preprocessor(scheduler="cpu")(x)
+    # x = Preprocessor()(x)
     x = ClientInferenceModel(
-        func=client_func, shape=(14, 14, 512), dtype="uint8", scheduler="cpu"
+        func=client_func,
+        shape=(14, 14, 512),
+        dtype="uint8",
     )(x)
-    x = Postencoder(scheduler="cpu")(x)
-    x = Predecoder(shape=(14, 14, 512), dtype="uint8", scheduler="cpu")(x)
+    x = Postencoder()(x)
+    x = Predecoder(
+        shape=(14, 14, 512),
+        dtype="uint8",
+    )(x)
     x = ServerInferenceModel(  #
-        func=server_func, shape=(1000,), dtype="float32", scheduler="cpu"
+        func=server_func,
+        shape=(1000,),
+        dtype="float32",
     )(x)
 
     outputs = [x]
@@ -87,23 +113,32 @@ def multi_branch_model():
     client_func = lambda x: Tensor(shape=(14, 14, 512), dtype="uint8")
     server_func = lambda x: Tensor(shape=(1000,), dtype="float32")
 
-    inputs = [Input(shape=(224, 224, 3), dtype="uint8", scheduler="io")]
+    inputs = [
+        Input(
+            shape=(224, 224, 3),
+            dtype="uint8",
+        )
+    ]
     a = inputs[0]
 
-    x = Postencoder(scheduler="cpu")(a)
+    x = Postencoder()(a)
     x = Predecoder(shape=(224, 224, 3), dtype="uint8")(x)
     b = x
     c = RandomMerge()(a, b)
     c = RandomMerge()(c, c)
 
-    x = Preprocessor(scheduler="cpu")(c)
+    # x = Preprocessor()(c)
     x = ClientInferenceModel(
-        func=client_func, shape=(14, 14, 512), dtype="uint8", scheduler="cpu"
+        func=client_func,
+        shape=(14, 14, 512),
+        dtype="uint8",
     )(x)
     x = Postencoder()(x)
     x = Predecoder(shape=(14, 14, 512), dtype="uint8")(x)
     x = ServerInferenceModel(  #
-        func=server_func, shape=(1000,), dtype="float32", scheduler="cpu"
+        func=server_func,
+        shape=(1000,),
+        dtype="float32",
     )(x)
 
     # outputs = [x, a, b, c]
@@ -119,7 +154,7 @@ def model_client_server():
 
     inputs = [Input(shape=(224, 224, 3), dtype="uint8")]
     x = inputs[0]
-    x = Preprocessor()(x)
+    # x = Preprocessor()(x)
     x = ClientInferenceModel(
         func=client_func, shape=(14, 14, 512), dtype="uint8"
     )(x)
@@ -244,10 +279,37 @@ def main_tcp():
     asyncio.run(tcp_echo_client(model_config))
 
 
+def main_tcp_redesign():
+    def create_server_graph():
+        inputs = [ServerTcpInput(shape=(None,), dtype="bytes")]
+        x = inputs[0]
+        # x = ServerTcpOutput(num_streams=len(inputs), sock=None)(x)
+        stream_infos = [TensorInfo(x.shape, x.dtype)]
+        x = ServerTcpOutput(num_streams=len(inputs), sock=None)(x)
+        outputs = [x]
+        return Model(inputs=inputs, outputs=outputs)
+
+    def create_client_graph():
+        inputs = [Input(shape=(None,), dtype="bytes")]
+        x = inputs[0]
+        x = ClientTcpServerSubgraph(
+            addr=("localhost", 5678),
+            graph=create_server_graph(),
+        )(x)
+        outputs = [x]
+        return Model(inputs=inputs, outputs=outputs)
+
+    client_model = create_client_graph()
+    frames = rx.from_iterable(["abc", "def", "ghi"])
+    outputs = client_model.to_rx(frames)
+    outputs[0].subscribe(print, subscribe_on=NewThreadScheduler())
+
+
 if __name__ == "__main__":
     # main()
     # main_rx()
-    main_tcp()
+    # main_tcp()
+    main_tcp_redesign()
 
 
 # TODO flow of actual data...? ehhhh
