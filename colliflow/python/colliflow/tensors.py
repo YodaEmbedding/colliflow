@@ -1,5 +1,5 @@
 from dataclasses import asdict, dataclass
-from typing import Tuple, Union
+from typing import Tuple, Union, cast
 
 from colliflow.typing import Dtype, JsonDict, Shape
 
@@ -26,8 +26,8 @@ class Tensor:  # pylint: disable=too-few-public-methods
         if shape is None or dtype is None:
             raise ValueError("Please ensure shape and dtype are correct.")
 
-        self.shape = tuple(shape)
-        self.dtype = dtype
+        self.shape: Shape = cast(Shape, tuple(shape))
+        self.dtype: Dtype = dtype
 
         # TODO hold some actual data!? Or is that a separate "DataTensor" type
         # Or perhaps Tensor and SymbolicTensor should inherit TensorLike
