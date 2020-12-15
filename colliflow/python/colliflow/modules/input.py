@@ -11,8 +11,8 @@ class InputModule(ForwardModule):
 
     name = "Input"
 
-    def __init__(self, shape: Shape, dtype: Dtype, **kwargs):
-        super().__init__(shape, dtype, **kwargs)
+    def __init__(self, shape: Shape, dtype: Dtype):
+        super().__init__(shape, dtype)
         self.input_shapes = [shape]
         self.input_dtypes = [dtype]
 

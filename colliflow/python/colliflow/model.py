@@ -3,6 +3,7 @@ import json
 from collections import abc
 from queue import Queue
 from typing import (
+    Any,
     AsyncIterator,
     Callable,
     Dict,
@@ -19,7 +20,7 @@ from typing import (
 
 import rx
 from rx import operators as ops
-from rx.core.notification import OnError, OnNext
+from rx.core.notification import Notification, OnError, OnNext
 from rx.scheduler import ThreadPoolScheduler
 from rx.scheduler.eventloop import AsyncIOScheduler
 
@@ -83,11 +84,17 @@ class Model:
 
     async def setup(self) -> AsyncIterator:
         """Sets up modules and yields their results."""
+
+        def setup_indexed(
+            i: int, module: Module
+        ) -> Callable[[], Tuple[int, Any]]:
+            return lambda: (i, module.setup())
+
         io_scheduler = ThreadPoolScheduler()
         observables = [
-            rx.from_callable(
-                lambda module=module, i=i: (i, module.setup())
-            ).pipe(ops.observe_on(io_scheduler))
+            rx.from_callable(setup_indexed(i, module)).pipe(
+                ops.observe_on(io_scheduler)
+            )
             for i, module in enumerate(self.modules)
         ]
         observable = rx.from_iterable(observables).pipe(ops.merge_all())
@@ -337,7 +344,7 @@ def _output_visiting_order(
 
 
 async def _rx_to_async_iter(observable: rx.Observable) -> AsyncIterator:
-    queue = asyncio.Queue()
+    queue: asyncio.Queue[Notification] = asyncio.Queue()
     loop = asyncio.get_event_loop()
 
     def on_next(x):

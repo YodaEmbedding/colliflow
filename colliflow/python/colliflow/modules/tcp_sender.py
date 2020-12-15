@@ -1,6 +1,5 @@
 import socket
-from time import sleep
-from typing import List, Optional, Tuple
+from typing import Any, Callable, Tuple
 
 import rx
 from rx import operators as ops
@@ -9,7 +8,7 @@ from rx.subject import ReplaySubject
 
 from colliflow.modules.module import OutputAsyncModule
 from colliflow.tcp import TcpSocketStreamWriter, TcpTensorOutputStream
-from colliflow.tensors import Tensor, TensorInfo
+from colliflow.tensors import Tensor
 from colliflow.typing import JsonDict
 
 
@@ -22,16 +21,18 @@ class TcpSender(OutputAsyncModule):
 
         self._sock = sock
         self._num_streams = num_streams
-        self._stream: Optional[TcpTensorOutputStream] = None
+        self._stream: TcpTensorOutputStream
 
     def inner_config(self):
         return {"num_streams": self._num_streams, "sock": None}
 
     def consume(self, *inputs: rx.Observable):
+        def pair_index(i: int) -> Callable[[Any], Any]:
+            return lambda x: (i, x)
+
         self._create_network_writer()
         indexed_inputs = [
-            obs.pipe(ops.map(lambda x, i=i: (i, x)))
-            for i, obs in enumerate(inputs)
+            obs.pipe(ops.map(pair_index(i))) for i, obs in enumerate(inputs)
         ]
         zipped = rx.zip(*indexed_inputs)
         zipped.subscribe(self._writer)

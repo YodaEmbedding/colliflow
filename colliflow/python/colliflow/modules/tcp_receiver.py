@@ -1,5 +1,5 @@
 import socket
-from typing import List, Optional, Union
+from typing import Any, Callable, List, Optional, Union
 
 import rx
 from rx import operators as ops
@@ -17,7 +17,7 @@ class TcpReceiver(InputAsyncModule):
 
     def __init__(
         self,
-        stream_infos: List[Union[TensorInfo, JsonDict]],
+        stream_infos: Union[List[TensorInfo], List[JsonDict]],
         sock: socket.socket,
     ):
         infos = [TensorInfo.from_(info) for info in stream_infos]
@@ -33,10 +33,13 @@ class TcpReceiver(InputAsyncModule):
         return {"stream_infos": infos, "sock": None}
 
     def produce(self) -> rx.Observable:
+        def filter_index(i: int) -> Callable[[Any], bool]:
+            return lambda x: x[0] == i
+
         self._create_network_reader()
         outputs = [
             self._network_reader.pipe(
-                ops.filter(lambda x, i=i: x[0] == i),
+                ops.filter(filter_index(i)),
                 ops.map(lambda x: x[1]),
             )
             for i in range(self._num_streams)

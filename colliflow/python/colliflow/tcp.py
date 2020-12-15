@@ -1,7 +1,7 @@
 import json
 import socket
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 import numpy as np
 
@@ -71,6 +71,8 @@ class TcpSocketStreamWriter:
 
 
 def tensor_from_bytes(dtype: Dtype, shape: Shape, data: bytes):
+    tensor_data: Any
+
     if dtype == "bytes":
         assert len(shape) == 1 and shape[0] is None
         tensor_data = data
