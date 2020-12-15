@@ -36,8 +36,8 @@ def _forward_unimplemented(self, *inputs: Any) -> Any:
 
 @dataclass(eq=False)
 class Node:
-    input_nodes: List["Node"] = field(default_factory=list)
-    output_nodes: List["Node"] = field(default_factory=list)
+    input_nodes: List["Module"] = field(default_factory=list)
+    output_nodes: List["Module"] = field(default_factory=list)
     input_shapes: List[Shape] = field(default_factory=list)
     input_dtypes: List[Dtype] = field(default_factory=list)
     output_shapes: List[Shape] = field(default_factory=list)
@@ -126,7 +126,7 @@ class Module(Node):
         """
         raise NotImplementedError
 
-    def config(self, node_lut: Dict[Node, int]) -> JsonDict:
+    def config(self, node_lut: Dict["Module", int]) -> JsonDict:
         """Returns serializable JSON dictionary.
 
         JSON dictionary describes graph connections and parameters
