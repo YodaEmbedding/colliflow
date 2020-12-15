@@ -40,6 +40,7 @@ class Server:
             print("sending", response_dict)
             await _writejsonfixed(writer, response_dict)
 
+
 async def _writejsonfixed(writer: StreamWriter, d: JsonDict):
     data = f"{json.dumps(d)}\n".encode()
     length = len(data).to_bytes(4, byteorder="big")

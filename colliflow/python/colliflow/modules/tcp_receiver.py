@@ -15,7 +15,11 @@ from colliflow.typing import Dtype, JsonDict, Shape
 class TcpReceiver(InputAsyncModule):
     name = "__AbstractModule"
 
-    def __init__(self, stream_infos: List[Union[TensorInfo, JsonDict]], sock: socket.socket):
+    def __init__(
+        self,
+        stream_infos: List[Union[TensorInfo, JsonDict]],
+        sock: socket.socket,
+    ):
         infos = [TensorInfo.from_(info) for info in stream_infos]
         info = infos[0]
         super().__init__(shape=info.shape, dtype=info.dtype)  # DEBUG
