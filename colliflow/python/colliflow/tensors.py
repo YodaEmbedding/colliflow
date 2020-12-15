@@ -1,7 +1,10 @@
 from dataclasses import asdict, dataclass
-from typing import Tuple, Union, cast
+from typing import TYPE_CHECKING, Tuple, Union, cast
 
 from colliflow.typing import Dtype, JsonDict, Shape
+
+if TYPE_CHECKING:
+    from colliflow.modules.module import Module
 
 
 @dataclass
@@ -38,9 +41,9 @@ class Tensor:  # pylint: disable=too-few-public-methods
 
 
 class SymbolicTensor(Tensor):  # pylint: disable=too-few-public-methods
-    def __init__(self, shape: Shape, dtype: Dtype, parent=None):
+    def __init__(self, shape: Shape, dtype: Dtype, parent: "Module" = None):
         super().__init__(shape, dtype)
-        self.parent = parent
+        self.parent: "Module" = parent
 
     def __repr__(self) -> str:
         s = f"shape={self.shape}, dtype={self.dtype}, parent={self.parent!r}"
