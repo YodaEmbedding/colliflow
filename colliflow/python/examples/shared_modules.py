@@ -1,5 +1,5 @@
 from time import sleep, time
-from typing import Tuple, cast
+from typing import Tuple
 
 import rx
 import rx.operators as ops
@@ -155,14 +155,11 @@ class FakeInputLayer(InputAsyncModule):
         return {"shape": self.shape, "dtype": self.dtype}
 
     def produce(self):
-        frames = rx.interval(1).pipe(
+        return rx.interval(1).pipe(
             ops.do_action(lambda x: print(f"\n{get_time():.1f}  Frame {x}\n")),
             ops.map(lambda _: Tensor((224, 224, 3), "uint8")),
-            ops.publish(),
+            ops.share(),
         )
-        frames = cast(rx.core.ConnectableObservable, frames)
-        frames.connect()
-        return frames
 
 
 def model_from_config(model_config) -> Model:

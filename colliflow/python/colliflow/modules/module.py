@@ -1,7 +1,7 @@
 import inspect
 from dataclasses import dataclass, field
 from time import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, cast
+from typing import Any, Callable, Dict, List, Optional, Type
 
 import rx
 from rx import operators as ops
@@ -207,10 +207,8 @@ class ForwardModule(Module):
         observable = _zip_observables(*inputs)
         observable = observable.pipe(
             self._forward_to_rx_op(),
-            ops.publish(),
+            ops.share(),
         )
-        observable = cast(rx.core.ConnectableObservable, observable)
-        observable.connect()
         return observable
 
     forward: Callable[..., Any] = _forward_unimplemented
@@ -274,7 +272,7 @@ class InputAsyncModule(Module):
         # TODO Does it make sense for module to be detached from graph?
         if self._is_used_in_static_graph:
             self._check_num_inputs(len(inputs), check_nodes=True)
-        return self.produce().pipe(ops.publish())
+        return self.produce().pipe(ops.share())
 
 
 class OutputAsyncModule(Module):
