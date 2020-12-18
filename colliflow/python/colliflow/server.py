@@ -16,29 +16,31 @@ class Server:
 
     async def start_async(self):
         server = await asyncio.start_server(
-            self.client_handler, self._host, self._port
+            _client_handler, self._host, self._port
         )
         await server.serve_forever()
 
-    async def client_handler(self, reader: StreamReader, writer: StreamWriter):
-        """Receives collaborative graph from client and sets it up."""
-        print("New client...")
-        ip, port = writer.get_extra_info("peername")
-        print(f"Connected to {ip}:{port}")
 
-        line = await reader.readline()
-        model = Model.deserialize(line.decode())
-        print(model)
-        await self._model_setup(model, writer)
-        print("model.setup() complete!")
-        model.to_rx([])
-        print("model.to_rx() complete!")
+async def _client_handler(reader: StreamReader, writer: StreamWriter):
+    """Receives collaborative graph from client and sets it up."""
+    print("New client...")
+    ip, port = writer.get_extra_info("peername")
+    print(f"Connected to {ip}:{port}")
 
-    async def _model_setup(self, model: Model, writer: StreamWriter):
-        async for module_id, result in model.setup():
-            response_dict = {"module_id": module_id, "result": result}
-            print("sending", response_dict)
-            await _writejsonfixed(writer, response_dict)
+    line = await reader.readline()
+    model = Model.deserialize(line.decode())
+    print(model)
+    await _model_setup(model, writer)
+    print("model.setup() complete!")
+    model.to_rx([])
+    print("model.to_rx() complete!")
+
+
+async def _model_setup(model: Model, writer: StreamWriter):
+    async for module_id, result in model.setup():
+        response_dict = {"module_id": module_id, "result": result}
+        print("sending", response_dict)
+        await _writejsonfixed(writer, response_dict)
 
 
 async def _writejsonfixed(writer: StreamWriter, d: JsonDict):
