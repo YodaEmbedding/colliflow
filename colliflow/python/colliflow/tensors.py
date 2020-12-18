@@ -1,5 +1,5 @@
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Tuple, Union
 
 from colliflow.typing import Dtype, JsonDict, Shape
 
@@ -24,26 +24,29 @@ class TensorInfo:
         return asdict(self)
 
 
-class Tensor:  # pylint: disable=too-few-public-methods
-    def __init__(self, shape: Shape, dtype: Dtype):
-        if shape is None or dtype is None:
+@dataclass
+class Tensor:
+    shape: Shape
+    dtype: Dtype
+    data: Any
+
+    def __post_init__(self):
+        if self.shape is None or self.dtype is None:
             raise ValueError("Please ensure shape and dtype are correct.")
-
-        self.shape: Shape = cast(Shape, tuple(shape))
-        self.dtype: Dtype = dtype
-
-        # TODO hold some actual data!? Or is that a separate "DataTensor" type
-        # Or perhaps Tensor and SymbolicTensor should inherit TensorLike
-        # self.data = data
 
     def __repr__(self) -> str:
         return f"Tensor(shape={self.shape}, dtype={self.dtype})"
 
 
-class SymbolicTensor(Tensor):  # pylint: disable=too-few-public-methods
-    def __init__(self, shape: Shape, dtype: Dtype, parent: "Module" = None):
-        super().__init__(shape, dtype)
-        self.parent: "Module" = parent
+@dataclass
+class SymbolicTensor:
+    shape: Shape
+    dtype: Dtype
+    parent: "Module" = None
+
+    def __post_init__(self):
+        if self.shape is None or self.dtype is None:
+            raise ValueError("Please ensure shape and dtype are correct.")
 
     def __repr__(self) -> str:
         s = f"shape={self.shape}, dtype={self.dtype}, parent={self.parent!r}"
