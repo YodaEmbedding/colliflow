@@ -203,7 +203,9 @@ class ForwardModule(Module):
         The output observable is multicast so it can be reused
         without worrying about recomputation.
         """
-        self._check_num_inputs(len(inputs), check_nodes=True)
+        self._check_num_inputs(
+            len(inputs), check_nodes=self._is_used_in_static_graph
+        )
         observable = _zip_observables(*inputs)
         observable = observable.pipe(
             self._forward_to_rx_op(),
