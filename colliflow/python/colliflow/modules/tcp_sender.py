@@ -75,6 +75,8 @@ class ClientTcpSender(TcpSender):
 class ServerTcpSender(TcpSender):
     name = "ServerTcpSender"
 
+    _is_conn_established: ReplaySubject
+
     def setup(self) -> JsonDict:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.bind(("0.0.0.0", 0))
@@ -107,9 +109,9 @@ class ServerTcpSender(TcpSender):
         print("waiting end")
 
 
-def ServerTcpOutput(
+def ServerTcpOutput(  # pylint: disable=invalid-name
     num_streams: int, sock: socket.socket
-) -> ServerTcpSender:  # pylint: disable=invalid-name
+) -> ServerTcpSender:
     return ServerTcpSender(num_streams=num_streams, sock=sock)
 
 

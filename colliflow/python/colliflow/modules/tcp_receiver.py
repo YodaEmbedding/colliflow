@@ -26,7 +26,8 @@ class TcpReceiver(InputAsyncModule):
         self._sock = sock
         self._infos = infos
         self._num_streams = len(self._infos)
-        self._stream: Optional[TcpTensorInputStream] = None
+        self._stream: TcpTensorInputStream
+        self._network_reader: rx.Observable
 
     def inner_config(self):
         infos = [x.as_dict() for x in self._infos]
@@ -65,6 +66,8 @@ class ClientTcpReceiver(TcpReceiver):
 class ServerTcpReceiver(TcpReceiver):
     name = "ServerTcpReceiver"
 
+    _is_conn_established: ReplaySubject
+
     def setup(self) -> JsonDict:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.bind(("0.0.0.0", 0))
@@ -98,9 +101,9 @@ class ServerTcpReceiver(TcpReceiver):
         print("waiting end")
 
 
-def ServerTcpInput(
+def ServerTcpInput(  # pylint: disable=invalid-name
     shape: Shape, dtype: Dtype, sock: Optional[socket.socket] = None
-) -> SymbolicTensor:  # pylint: disable=invalid-name
+) -> SymbolicTensor:
     info = TensorInfo(shape=shape, dtype=dtype)
     module = ServerTcpReceiver([info], sock=sock)
     x = SymbolicTensor(shape=shape, dtype=dtype, parent=module)

@@ -4,7 +4,9 @@ from typing import TYPE_CHECKING, Any, Tuple, Union
 from colliflow.typing import Dtype, JsonDict, Shape
 
 if TYPE_CHECKING:
-    from colliflow.modules.module import Module
+    from colliflow.modules.module import (  # pylint: disable=cyclic-import
+        Module,
+    )
 
 
 @dataclass

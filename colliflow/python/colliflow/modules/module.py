@@ -137,10 +137,7 @@ class Module(Node):
             "name": self.name,
             "inputs": [node_lut.get(x, None) for x in self.input_nodes],
             "outputs": [node_lut.get(x, None) for x in self.output_nodes],
-            "tensor_inputs": [
-                (shape, dtype)
-                for shape, dtype in zip(self.input_shapes, self.input_dtypes)
-            ],
+            "tensor_inputs": list(zip(self.input_shapes, self.input_dtypes)),
             "config": self.inner_config(),
         }
 
@@ -153,7 +150,10 @@ class Module(Node):
         return create_module(**module_config)
 
     def _check_num_inputs(
-        self, n_input: int, check_nodes=False, check_signature=False
+        self,
+        n_input: int,
+        check_nodes=False,
+        check_signature=False,  # pylint: disable=unused-argument
     ):
         n_nodes = len(self.input_nodes)
         if check_nodes and n_input != n_nodes:
@@ -189,7 +189,7 @@ class Module(Node):
         return outputs[0]
 
 
-class ForwardModule(Module):
+class ForwardModule(Module):  # pylint: disable=abstract-method
     """Function from M tensors to N tensors. M, N > 0."""
 
     name = "__AbstractModule"
@@ -241,7 +241,7 @@ def _forward_async_unimplemented(
     raise NotImplementedError
 
 
-class ForwardAsyncModule(Module):
+class ForwardAsyncModule(Module):  # pylint: disable=abstract-method
     """Function from M observables to N observables. M, N > 0."""
 
     name = "__AbstractModule"
