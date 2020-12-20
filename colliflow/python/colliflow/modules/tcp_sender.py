@@ -27,15 +27,8 @@ class TcpSender(OutputAsyncModule):
         return {"num_streams": self._num_streams, "sock": None}
 
     def consume(self, *inputs: rx.Observable):
-        def pair_index(i: int) -> Callable[[Any], Any]:
-            return lambda x: (i, x)
-
         self._create_network_writer()
-        indexed_inputs = [
-            obs.pipe(ops.map(pair_index(i))) for i, obs in enumerate(inputs)
-        ]
-        zipped = rx.zip(*indexed_inputs)
-        zipped.subscribe(self._writer)
+        _rx_mux(*inputs).subscribe(self._writer)
 
     def _create_network_writer(self):
         stream_writer = TcpSocketStreamWriter(self._sock)
@@ -113,6 +106,32 @@ def ServerTcpOutput(  # pylint: disable=invalid-name
     num_streams: int, sock: socket.socket
 ) -> ServerTcpSender:
     return ServerTcpSender(num_streams=num_streams, sock=sock)
+
+
+def _rx_mux(*xss: rx.Observable) -> rx.Observable:
+    """Combines observables into single observable of indexed tuples.
+
+    ```
+    A:   --- A1 -------- A2 -- A3 ----------->
+    B:   -------- B1 ----------------- B3 --->
+                    [ rx_mux ]
+    out: --- A1 - B1 --- A2 -- A3 ---- B3 --->
+    ```
+
+    The output events are of type `tuple[int, AOut | BOut]`,
+    where the first item represents the stream index (A = 0, B = 1),
+    and the second item holds the data.
+    """
+    ops.map
+
+    def pair_index(i: int) -> Callable[[Any], Any]:
+        def inner(x: Any) -> Tuple[int, Any]:
+            return i, x
+
+        return inner
+
+    paired = [xs.pipe(ops.map(pair_index(i))) for i, xs in enumerate(xss)]
+    return rx.from_iterable(paired).pipe(ops.merge_all())
 
 
 __all__ = [
