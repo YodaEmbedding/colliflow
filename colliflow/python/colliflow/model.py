@@ -89,16 +89,7 @@ class Model:
 
     def setup_blocking(self) -> List[Tuple[int, Any]]:
         """Sets up modules and yields their results (non-async version)."""
-        def _collect():
-            def on_error(e):
-                print(e)
-                raise e
-            result_pairs = []
-            on_next = result_pairs.append
-            self._setup().subscribe(on_next=on_next, on_error=on_error)
-            return result_pairs
-        return _collect()
-        # return self._setup().pipe(ops.to_list()).run()
+        return [(i, module.setup()) for i, module in enumerate(self.modules)]
 
     def to_rx(
         self, *inputs: MaybeSequence[rx.Observable]
