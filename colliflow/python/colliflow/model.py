@@ -82,24 +82,23 @@ class Model:
         left_col = max(len(p) for p, _ in rows)
         return "\n".join(f"{p:{left_col}}  {m}" for p, m in rows)
 
-    async def setup(self) -> AsyncIterator:
+    async def setup(self) -> AsyncIterator[Tuple[int, Any]]:
         """Sets up modules and yields their results."""
-
-        def setup_indexed(
-            i: int, module: Module
-        ) -> Callable[[], Tuple[int, Any]]:
-            return lambda: (i, module.setup())
-
-        io_scheduler = ThreadPoolScheduler()
-        observables = [
-            rx.from_callable(setup_indexed(i, module)).pipe(
-                ops.observe_on(io_scheduler)
-            )
-            for i, module in enumerate(self.modules)
-        ]
-        observable = rx.from_iterable(observables).pipe(ops.merge_all())
-        async for result_pair in _rx_to_async_iter(observable):
+        async for result_pair in _rx_to_async_iter(self._setup()):
             yield result_pair
+
+    def setup_blocking(self) -> List[Tuple[int, Any]]:
+        """Sets up modules and yields their results (non-async version)."""
+        def _collect():
+            def on_error(e):
+                print(e)
+                raise e
+            result_pairs = []
+            on_next = result_pairs.append
+            self._setup().subscribe(on_next=on_next, on_error=on_error)
+            return result_pairs
+        return _collect()
+        # return self._setup().pipe(ops.to_list()).run()
 
     def to_rx(
         self, *inputs: MaybeSequence[rx.Observable]
@@ -132,6 +131,17 @@ class Model:
     def deserialize_dict(model_config: List[JsonDict]) -> "Model":
         """Deserialize model from JSON-serializable structure."""
         return _deserialize_dict(model_config)
+
+    def _setup(self) -> rx.Observable:
+        def setup_indexed(i: int, module: Module) -> Callable[[], Any]:
+            return lambda: (i, module.setup())
+
+        io_scheduler = ThreadPoolScheduler()
+        observables = [
+            rx.from_callable(setup_indexed(i, module), scheduler=io_scheduler)
+            for i, module in enumerate(self.modules)
+        ]
+        return rx.from_iterable(observables).pipe(ops.merge_all())
 
     def _predict(self, *inputs: Sequence[Tensor]) -> List[Tensor]:
         apply_module = lambda module, xs: module(*xs)
@@ -341,7 +351,9 @@ def _output_visiting_order(
     yield output_node
 
 
-async def _rx_to_async_iter(observable: rx.Observable) -> AsyncIterator:
+async def _rx_to_async_iter(
+    observable: rx.Observable,
+) -> AsyncIterator[Tuple[int, Any]]:
     queue: asyncio.Queue[Notification] = asyncio.Queue()
     loop = asyncio.get_event_loop()
 

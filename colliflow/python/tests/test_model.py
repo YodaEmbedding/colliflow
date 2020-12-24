@@ -19,7 +19,7 @@ def test_run_empty_graph():
     results = []
 
     model = create_graph()
-    model.setup()
+    model.setup_blocking()
     obs = model.to_rx(rx.from_iterable(inputs))
     obs[0].subscribe(lambda x: results.append(x))
 
@@ -47,7 +47,7 @@ def test_run_simple_graph():
     results = []
 
     model = create_graph()
-    model.setup()
+    model.setup_blocking()
     obs = model.to_rx(rx.from_iterable(inputs))
     obs[0].subscribe(lambda x: results.append(x))
 
@@ -93,7 +93,7 @@ def test_serverclient_intraprocess_graph():
     results = []
 
     model = create_client_graph()
-    model.setup()
+    model.setup_blocking()
     obs = model.to_rx(rx.from_iterable(inputs))
     obs[0].subscribe(lambda x: results.append(x))
 
@@ -139,7 +139,7 @@ def test_serverclient_intraprocess_streaming_graph():
     results = []
 
     model = create_client_graph()
-    model.setup()
+    model.setup_blocking()
     obs = model.to_rx(rx.from_iterable(inputs))
     obs[0].subscribe(lambda x: results.append(x))
 
