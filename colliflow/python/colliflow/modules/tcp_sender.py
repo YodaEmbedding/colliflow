@@ -6,10 +6,11 @@ from rx import operators as ops
 from rx.scheduler import ThreadPoolScheduler
 from rx.subject import ReplaySubject
 
-from colliflow.modules.module import OutputAsyncModule
 from colliflow.tcp import TcpSocketStreamWriter, TcpTensorOutputStream
 from colliflow.tensors import Tensor
 from colliflow.typing import JsonDict
+
+from .module import OutputAsyncModule
 
 
 class TcpSender(OutputAsyncModule):

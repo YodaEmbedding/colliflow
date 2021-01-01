@@ -3,12 +3,13 @@ from typing import TYPE_CHECKING, Optional, Tuple
 
 import rx
 
-from colliflow.modules.module import ForwardAsyncModule
-from colliflow.modules.tcp_receiver import ClientTcpReceiver, ServerTcpReceiver
-from colliflow.modules.tcp_sender import ClientTcpSender, ServerTcpSender
 from colliflow.tcp import TcpSocketStreamReader, TcpSocketStreamWriter
 from colliflow.tensors import TensorInfo
 from colliflow.typing import JsonDict
+
+from .module import ForwardAsyncModule
+from .tcp_receiver import ClientTcpReceiver, ServerTcpReceiver
+from .tcp_sender import ClientTcpSender, ServerTcpSender
 
 if TYPE_CHECKING:
     from colliflow.model import Model

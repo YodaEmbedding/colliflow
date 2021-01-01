@@ -6,10 +6,11 @@ from rx import operators as ops
 from rx.scheduler import ThreadPoolScheduler
 from rx.subject import ReplaySubject
 
-from colliflow.modules.module import InputAsyncModule
 from colliflow.tcp import TcpSocketStreamReader, TcpTensorInputStream
 from colliflow.tensors import SymbolicTensor, TensorInfo
 from colliflow.typing import Dtype, JsonDict, Shape
+
+from .module import InputAsyncModule
 
 
 class TcpReceiver(InputAsyncModule):
