@@ -47,9 +47,8 @@ class Tensor:
 
         dtype_eq = self.dtype == other.dtype
         shape_eq = (
-            (is_none_shape(self) and is_none_shape(other)) or
-            self.shape == other.shape
-        )
+            is_none_shape(self) and is_none_shape(other)
+        ) or self.shape == other.shape
         data_eq = (
             np.all(self.data == other.data)
             if isinstance(self, np.ndarray)
