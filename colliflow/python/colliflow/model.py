@@ -89,9 +89,14 @@ class Model:
         async for result_pair in _rx_to_async_iter(self._setup()):
             yield result_pair
 
-    def setup_blocking(self) -> List[Tuple[int, Any]]:
+    def setup_blocking(self, parallel: bool = False) -> List[Tuple[int, Any]]:
         """Sets up modules and yields their results (non-async version)."""
-        return [(i, module.setup()) for i, module in enumerate(self.modules)]
+        if not parallel:
+            return [
+                (i, module.setup()) for i, module in enumerate(self.modules)
+            ]
+        results = asyncio.run(self._setup_collect())
+        return [results[i] for i in range(len(self.modules))]
 
     def to_rx(
         self, *inputs: MaybeSequence[rx.Observable]
@@ -135,6 +140,12 @@ class Model:
             for i, module in enumerate(self.modules)
         ]
         return rx.from_iterable(observables).pipe(ops.merge_all())
+
+    async def _setup_collect(self) -> Dict[int, Any]:
+        results = {}
+        async for module_id, result in self.setup():
+            results[module_id] = result
+        return results
 
     def _predict(self, *inputs: Sequence[Tensor]) -> List[Tensor]:
         apply_module = lambda module, xs: module(*xs)
