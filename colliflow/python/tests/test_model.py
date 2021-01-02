@@ -1,4 +1,5 @@
 from time import sleep
+from typing import Any, Callable, List, Sequence
 
 import numpy as np
 import rx
@@ -117,18 +118,8 @@ def test_serverclient_intraprocess_streaming_loopback_graph():
             sock = LoopbackMockSocket()
             write = sock.sendall
             read = lambda: read_mux_packet(sock)
-
-            num_input_streams = len(inputs)
-            mux_writer = MuxWriter(num_input_streams)
-            controller = MuxWriterController(mux_writer)
-            mux_write(mux_writer, *inputs)
-            start_writer_thread(controller, write)
-
-            num_output_streams = num_input_streams
-            mux_packets = Subject()
-            start_reader_thread(mux_packets, read)
-            outputs = mux_read(mux_packets, num_output_streams)
-
+            start_writer(inputs, write)
+            outputs = start_reader(len(inputs), read)
             return outputs[0]
 
     def create_client_graph():
@@ -161,6 +152,24 @@ def test_serverclient_graph():
     # from multiprocessing import Process
     # p = Process(target=...)
     raise NotImplementedError
+
+
+def start_writer(
+    inputs: Sequence[rx.Observable], write: Callable[[bytes], None]
+):
+    num_input_streams = len(inputs)
+    mux_writer = MuxWriter(num_input_streams)
+    controller = MuxWriterController(mux_writer)
+    mux_write(mux_writer, *inputs)
+    start_writer_thread(controller, write)
+
+
+def start_reader(
+    num_streams: int, read: Callable[[], Any]
+) -> List[rx.Observable]:
+    mux_packets = Subject()
+    start_reader_thread(mux_packets, read)
+    return mux_read(mux_packets, num_streams)
 
 
 # def test_complex_graph
