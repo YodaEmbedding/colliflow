@@ -78,6 +78,9 @@ def test_serverclient_intraprocess_graph():
             )
             self.graph = graph
 
+        def inner_config(self):
+            return {}
+
         def setup(self):
             return asyncio.run(self._setup())
 
