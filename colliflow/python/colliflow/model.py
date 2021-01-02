@@ -1,5 +1,6 @@
 import asyncio
 import json
+from asyncio.events import AbstractEventLoop
 from collections import abc
 from queue import Queue
 from typing import (
@@ -10,6 +11,7 @@ from typing import (
     Iterable,
     Iterator,
     List,
+    Optional,
     Sequence,
     Set,
     Tuple,
@@ -344,12 +346,15 @@ def _output_visiting_order(
 
 async def _rx_to_async_iter(
     observable: rx.Observable,
+    loop: Optional[AbstractEventLoop] = None,
 ) -> AsyncIterator[Tuple[int, Any]]:
     queue: asyncio.Queue[Notification] = asyncio.Queue()
-    loop = asyncio.get_event_loop()
+    if loop is None:
+        loop = asyncio.get_event_loop()
 
     def on_next(x):
-        queue.put_nowait(x)
+        assert loop is not None
+        asyncio.run_coroutine_threadsafe(queue.put(x), loop)
 
     disposable = observable.pipe(ops.materialize()).subscribe(
         on_next=on_next, scheduler=AsyncIOScheduler(loop=loop)
