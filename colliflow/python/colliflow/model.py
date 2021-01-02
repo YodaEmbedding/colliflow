@@ -85,8 +85,8 @@ class Model:
         return "\n".join(f"{p:{left_col}}  {m}" for p, m in rows)
 
     async def setup(self) -> AsyncIterator[Tuple[int, Any]]:
-        """Sets up modules and yields their results."""
-        async for result_pair in _rx_to_async_iter(self._setup()):
+        """Sets up modules in parallel and yields their results."""
+        async for result_pair in _rx_to_async_iter(self._setup_parallel()):
             yield result_pair
 
     def setup_blocking(self, parallel: bool = False) -> List[Tuple[int, Any]]:
@@ -130,7 +130,7 @@ class Model:
         """Deserialize model from JSON-serializable structure."""
         return _deserialize_dict(model_config)
 
-    def _setup(self) -> rx.Observable:
+    def _setup_parallel(self) -> rx.Observable:
         def setup_indexed(i: int, module: Module) -> Callable[[], Any]:
             return lambda: (i, module.setup())
 
