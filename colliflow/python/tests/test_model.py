@@ -1,11 +1,26 @@
 import asyncio
+from time import sleep
 
+import numpy as np
 import rx
-import rx.operators as ops
+from rx.subject import Subject
 
 from colliflow.model import Model
 from colliflow.modules import *
+from colliflow.serialization.mux_reader import (
+    mux_read,
+    read_mux_packet,
+    start_reader_thread,
+)
+from colliflow.serialization.mux_writer import (
+    MuxWriter,
+    MuxWriterController,
+    mux_write,
+    start_writer_thread,
+)
 from colliflow.tensors import Tensor
+
+from .mock.socket import LoopbackMockSocket
 
 
 def test_run_empty_graph():
@@ -110,31 +125,43 @@ def test_serverclient_intraprocess_streaming_graph():
             self.graph = graph
 
         def setup(self):
-            return asyncio.run(self._setup())
+            pass
 
         def forward(self, *inputs: rx.Observable) -> rx.Observable:
-            # TODO ser/des for DATA
-            raise NotImplementedError
+            sock = LoopbackMockSocket()
 
-        async def _setup(self):
-            results = {}
-            async for module_id, result in self.graph.setup():
-                results[module_id] = result
-            return results
+            write = sock.sendall
+            num_input_streams = len(inputs)
+            mux_writer = MuxWriter(num_input_streams)
+            controller = MuxWriterController(mux_writer)
+            mux_write(mux_writer, *inputs)
+            start_writer_thread(controller, write)
+
+            read = lambda: read_mux_packet(sock)
+            # TODO measure num_output_streams properly; len(TcpOutput.outputs)
+            # num_output_streams = len(self.graph._outputs)
+            num_output_streams = 1  # DEBUG
+            mux_packets = Subject()
+            start_reader_thread(mux_packets, read)
+            outputs = mux_read(mux_packets, num_output_streams)
+
+            return outputs[0]
 
     def create_client_graph():
-        inputs = [Input((1,), "int")]
+        inputs = [Input((1,), "int32")]
         x = inputs[0]
         x = IntraprocessStreamingServer(graph=create_server_graph())(x)
         outputs = [x]
         return Model(inputs=inputs, outputs=outputs)
 
     def create_server_graph():
-        inputs = [Input((1,), "int")]
+        inputs = [Input((1,), "int32")]
         outputs = inputs
         return Model(inputs=inputs, outputs=outputs)
 
-    inputs = [Tensor((1,), "int", x) for x in [1, 2, 3]]
+    inputs = [
+        Tensor((1,), "int32", np.array([x], dtype=np.int32)) for x in [1, 2, 3]
+    ]
     expected = inputs
     results = []
 
@@ -143,13 +170,17 @@ def test_serverclient_intraprocess_streaming_graph():
     obs = model.to_rx(rx.from_iterable(inputs))
     obs[0].subscribe(lambda x: results.append(x))
 
+    sleep(0.3)
+
     assert results == expected
+
+
+# TODO replace loopback socket with actual graph
 
 
 def test_serverclient_graph():
     # TODO automatically open new python process for "server"
-    from multiprocessing import Process
-
+    # from multiprocessing import Process
     # p = Process(target=...)
     raise NotImplementedError
 
@@ -158,6 +189,14 @@ def test_serverclient_graph():
 # def test_multibranch_graph
 # def test_serverclient_graph
 
+# MAIN COMPONENTS:
+#
+# - Data stream mux/demux serialization
+# - Data stream controller (determines how much data to send per stream)
+# - Data tcp stream
+# - Tcp stream setup
+#
+# Separate these components into composable classes
 
 # test "fake communication" or "fake subgraph"?
 # Test TcpSubgraph style module but without actual Tcp?
