@@ -144,6 +144,74 @@ def test_serverclient_intraprocess_streaming_loopback_graph():
     assert results == expected
 
 
+def test_serverclient_intraprocess_streaming_graph():
+    class IntraprocessStreamingServer(ForwardAsyncModule):
+        def __init__(self, graph: Model):
+            super().__init__(
+                shape=graph._outputs[0].shape,
+                dtype=graph._outputs[0].dtype,
+            )
+            self.graph = graph
+            self.in_sock = LoopbackMockSocket()
+            self.out_sock = LoopbackMockSocket()
+
+        def setup(self):
+            self._start_server(in_sock=self.out_sock, out_sock=self.in_sock)
+
+        def forward(self, *inputs: rx.Observable) -> rx.Observable:
+            # TODO measure num_output_streams properly; len(TcpOutput.outputs)
+            # num_output_streams = len(self.graph._outputs)
+            num_output_streams = 1  # DEBUG
+            write = self.out_sock.sendall
+            read = lambda: read_mux_packet(self.in_sock)
+
+            start_writer(inputs, write)
+            outputs = start_reader(num_output_streams, read)
+
+            return outputs[0]
+
+        def _start_server(self, in_sock, out_sock):
+            self.graph.setup_blocking()
+
+            num_input_streams = 1  # DEBUG
+            write = out_sock.sendall
+            read = lambda: read_mux_packet(in_sock)
+
+            inputs = start_reader(num_input_streams, read)
+            outputs = self.graph.to_rx(*inputs)
+            start_writer(outputs, write)
+
+            # TODO perhaps no output generated due to ConnectableObservable (?)
+            # bug that we were wondering about
+
+    def create_client_graph():
+        inputs = [Input((1,), "int32")]
+        x = inputs[0]
+        x = IntraprocessStreamingServer(graph=create_server_graph())(x)
+        outputs = [x]
+        return Model(inputs=inputs, outputs=outputs)
+
+    def create_server_graph():
+        inputs = [Input((1,), "int32")]
+        outputs = inputs
+        return Model(inputs=inputs, outputs=outputs)
+
+    inputs = [
+        Tensor((1,), "int32", np.array([x], dtype=np.int32)) for x in [1, 2, 3]
+    ]
+    expected = inputs
+    results = []
+
+    model = create_client_graph()
+    model.setup_blocking()
+    obs = model.to_rx(rx.from_iterable(inputs))
+    obs[0].subscribe(lambda x: results.append(x))
+
+    sleep(0.3)
+
+    assert results == expected
+
+
 # TODO replace loopback socket with actual graph
 
 
