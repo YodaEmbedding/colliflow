@@ -111,32 +111,20 @@ def test_serverclient_intraprocess_graph():
     assert results == expected
 
 
-def test_serverclient_intraprocess_streaming_graph():
-    class IntraprocessStreamingServer(ForwardAsyncModule):
-        def __init__(self, graph: Model):
-            super().__init__(
-                shape=graph._outputs[0].shape,
-                dtype=graph._outputs[0].dtype,
-            )
-            self.graph = graph
-
-        def setup(self):
-            pass
-
+def test_serverclient_intraprocess_streaming_loopback_graph():
+    class IntraprocessStreamingLoopbackServer(ForwardAsyncModule):
         def forward(self, *inputs: rx.Observable) -> rx.Observable:
             sock = LoopbackMockSocket()
-
             write = sock.sendall
+            read = lambda: read_mux_packet(sock)
+
             num_input_streams = len(inputs)
             mux_writer = MuxWriter(num_input_streams)
             controller = MuxWriterController(mux_writer)
             mux_write(mux_writer, *inputs)
             start_writer_thread(controller, write)
 
-            read = lambda: read_mux_packet(sock)
-            # TODO measure num_output_streams properly; len(TcpOutput.outputs)
-            # num_output_streams = len(self.graph._outputs)
-            num_output_streams = 1  # DEBUG
+            num_output_streams = num_input_streams
             mux_packets = Subject()
             start_reader_thread(mux_packets, read)
             outputs = mux_read(mux_packets, num_output_streams)
@@ -146,13 +134,8 @@ def test_serverclient_intraprocess_streaming_graph():
     def create_client_graph():
         inputs = [Input((1,), "int32")]
         x = inputs[0]
-        x = IntraprocessStreamingServer(graph=create_server_graph())(x)
+        x = IntraprocessStreamingLoopbackServer((1,), "int32")(x)
         outputs = [x]
-        return Model(inputs=inputs, outputs=outputs)
-
-    def create_server_graph():
-        inputs = [Input((1,), "int32")]
-        outputs = inputs
         return Model(inputs=inputs, outputs=outputs)
 
     inputs = [
@@ -165,7 +148,6 @@ def test_serverclient_intraprocess_streaming_graph():
     model.setup_blocking()
     obs = model.to_rx(rx.from_iterable(inputs))
     obs[0].subscribe(lambda x: results.append(x))
-
     sleep(0.3)
 
     assert results == expected
