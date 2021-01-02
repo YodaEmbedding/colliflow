@@ -1,4 +1,3 @@
-import asyncio
 from time import sleep
 
 import numpy as np
@@ -82,17 +81,11 @@ def test_serverclient_intraprocess_graph():
             return {}
 
         def setup(self):
-            return asyncio.run(self._setup())
+            return self.graph.setup_blocking()
 
         def forward(self, *inputs: rx.Observable) -> rx.Observable:
             xss = self.graph.to_rx(*inputs)
             return xss[0]
-
-        async def _setup(self):
-            results = {}
-            async for module_id, result in self.graph.setup():
-                results[module_id] = result
-            return results
 
     def create_client_graph():
         inputs = [Input((1,), "int")]
