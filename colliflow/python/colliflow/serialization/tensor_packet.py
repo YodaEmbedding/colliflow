@@ -138,7 +138,7 @@ def _data_from_bytes(buf: BufferLike) -> Tuple[int, bytes]:
     return bytes_read, data
 
 
-def _tensor_data_from_bytes(shape: Shape, dtype: Dtype, data: bytes) -> Tensor:
+def _tensor_data_from_bytes(shape: Shape, dtype: Dtype, data: bytes) -> Any:
     tensor_data: Any
 
     if dtype == "bytes":
@@ -152,11 +152,7 @@ def _tensor_data_from_bytes(shape: Shape, dtype: Dtype, data: bytes) -> Tensor:
     else:
         raise ValueError(f"Unrecognized dtype {dtype}.")
 
-    return Tensor(
-        dtype=dtype,
-        shape=shape,
-        data=tensor_data,
-    )
+    return tensor_data
 
 
 def _tensor_data_to_bytes(tensor: Tensor) -> bytes:
