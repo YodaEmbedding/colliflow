@@ -89,7 +89,6 @@ class MuxWriterController:
         """Returns next packet for sending."""
         self._mux_writer.wait_until_data_available()
         buffer_sizes = self._mux_writer.buffer_sizes
-        print(buffer_sizes)
         stream_id, num_bytes = next(
             (i, x) for i, x in enumerate(buffer_sizes) if x != 0
         )
