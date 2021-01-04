@@ -73,10 +73,6 @@ class Module(Node):
         self.output_dtypes = [dtype]
         self._is_used_in_static_graph: bool = False
 
-        # DEBUG
-        self.shape = shape
-        self.dtype = dtype
-
     def __init_subclass__(cls, **kwargs):
         """Registers module classes (required for serializability).
 
