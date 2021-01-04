@@ -19,6 +19,7 @@ from colliflow.serialization.mux_writer import (
     start_writer_thread,
 )
 from colliflow.tensors import Tensor
+from colliflow.typing import Dtype, Shape
 
 from .mock.socket import LoopbackMockSocket
 
@@ -114,13 +115,24 @@ def test_serverclient_intraprocess_graph():
 
 def test_serverclient_intraprocess_streaming_loopback_graph():
     class IntraprocessStreamingLoopbackServer(ForwardAsyncModule):
-        def forward(self, *inputs: rx.Observable) -> rx.Observable:
+        def __init__(self, shape: Shape, dtype: Dtype):
+            super().__init__(shape=shape, dtype=dtype)
+            num_input_streams = 1
+            self.inputs = [Subject() for _ in range(num_input_streams)]
+            self.outputs: List[rx.Observable]
+
+        def setup(self):
+            num_output_streams = 1
             sock = LoopbackMockSocket()
             write = sock.sendall
             read = lambda: read_mux_packet(sock)
-            start_writer(inputs, write)
-            outputs = start_reader(len(inputs), read)
-            return outputs[0]
+            start_writer(self.inputs, write)
+            self.outputs = start_reader(num_output_streams, read)
+
+        def forward(self, *inputs: rx.Observable) -> rx.Observable:
+            for obs, subject in zip(inputs, self.inputs):
+                obs.subscribe(subject)
+            return self.outputs[0]
 
     def create_client_graph():
         inputs = [Input((1,), "int32")]
@@ -155,34 +167,36 @@ def test_serverclient_intraprocess_streaming_graph():
             self.in_sock = LoopbackMockSocket()
             self.out_sock = LoopbackMockSocket()
 
+            num_input_streams = len(self.graph._inputs)
+            self.inputs = [Subject() for _ in range(num_input_streams)]
+            self.outputs: List[rx.Observable]
+
         def setup(self):
             self._start_server(in_sock=self.out_sock, out_sock=self.in_sock)
+            self._start_stream(in_sock=self.in_sock, out_sock=self.out_sock)
 
         def forward(self, *inputs: rx.Observable) -> rx.Observable:
-            # TODO measure num_output_streams properly; len(TcpOutput.outputs)
-            # num_output_streams = len(self.graph._outputs)
-            num_output_streams = 1  # DEBUG
-            write = self.out_sock.sendall
-            read = lambda: read_mux_packet(self.in_sock)
+            for obs, subject in zip(inputs, self.inputs):
+                obs.subscribe(subject)
+            return self.outputs[0]
 
-            start_writer(inputs, write)
-            outputs = start_reader(num_output_streams, read)
-
-            return outputs[0]
+        def _start_stream(self, in_sock, out_sock):
+            num_output_streams = len(self.graph._outputs)
+            write = out_sock.sendall
+            read = lambda: read_mux_packet(in_sock)
+            start_writer(self.inputs, write)
+            self.outputs = start_reader(num_output_streams, read)
 
         def _start_server(self, in_sock, out_sock):
             self.graph.setup_blocking()
 
-            num_input_streams = 1  # DEBUG
+            num_input_streams = len(self.graph._inputs)
             write = out_sock.sendall
             read = lambda: read_mux_packet(in_sock)
 
             inputs = start_reader(num_input_streams, read)
             outputs = self.graph.to_rx(*inputs)
             start_writer(outputs, write)
-
-            # TODO perhaps no output generated due to ConnectableObservable (?)
-            # bug that we were wondering about
 
     def create_client_graph():
         inputs = [Input((1,), "int32")]
@@ -210,9 +224,6 @@ def test_serverclient_intraprocess_streaming_graph():
     sleep(0.3)
 
     assert results == expected
-
-
-# TODO replace loopback socket with actual graph
 
 
 def test_serverclient_graph():
