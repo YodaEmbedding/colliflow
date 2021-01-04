@@ -43,18 +43,14 @@ def test_run_empty_graph():
 
 
 def test_run_simple_graph():
-    class MyForwardModule(ForwardModule):
-        def __init__(self):
-            super().__init__((1,), "str")
-
+    class Stringify(ForwardModule):
         def forward(self, x: Tensor) -> Tensor:
-            # TODO perhaps insert an auto-assert on tensor's type and shape
-            return Tensor(self.shape, self.dtype, str(x.data))
+            return Tensor((1,), "str", str(x.data))
 
     def create_graph():
         inputs = [Input((1,), "int")]
         x = inputs[0]
-        x = MyForwardModule()(x)
+        x = Stringify((1,), "str")(x)
         outputs = [x]
         return Model(inputs=inputs, outputs=outputs)
 
@@ -200,7 +196,7 @@ def test_serverclient_intraprocess_streaming_graph():
 
     class Square(ForwardModule):
         def forward(self, x: Tensor):
-            return Tensor(self.shape, self.dtype, x.data ** 2)
+            return Tensor(x.shape, x.dtype, x.data ** 2)
 
     def create_client_graph():
         inputs = [Input((1,), "int32")]
