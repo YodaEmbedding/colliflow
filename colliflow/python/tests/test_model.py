@@ -256,7 +256,6 @@ def start_reader(
 
 # def test_complex_graph
 # def test_multibranch_graph
-# def test_serverclient_graph
 
 # MAIN COMPONENTS:
 #
@@ -267,17 +266,8 @@ def start_reader(
 #
 # Separate these components into composable classes
 
-# test "fake communication" or "fake subgraph"?
-# Test TcpSubgraph style module but without actual Tcp?
-
-# Test incrementally...
-# e.g. test the DATA serialization functionality
-# then test the DATA "read/write" on actual threads
-# then test with proper TCP
-# then test with "Server()-based subgraph runner"
-
-# If you test incrementally, you can have following benefits:
-#
-#   - "guarantee" of stuff working
-#   - ability to decouple code into separate testable units
-#   - reduced TcpSender/TcpReceiver/etc complexity
+# To implement:
+# - Actual TCP socket test (not a mock socket)
+# - TCP module auto-setup
+# - Server() class
+# - Multi-output TCP
