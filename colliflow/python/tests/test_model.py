@@ -141,9 +141,9 @@ def test_serverclient_intraprocess_streaming_loopback_graph():
         outputs = [x]
         return Model(inputs=inputs, outputs=outputs)
 
-    inputs = [
-        Tensor((1,), "int32", np.array([x], dtype=np.int32)) for x in [1, 2, 3]
-    ]
+    tensor_of = lambda x: Tensor((1,), "int32", np.array([x], dtype=np.int32))
+    inputs = [tensor_of(x) for x in [1, 2, 3]]
+    expected = inputs
     expected = inputs
     results = []
 
@@ -198,6 +198,10 @@ def test_serverclient_intraprocess_streaming_graph():
             outputs = self.graph.to_rx(*inputs)
             start_writer(outputs, write)
 
+    class Square(ForwardModule):
+        def forward(self, x: Tensor):
+            return Tensor(self.shape, self.dtype, x.data ** 2)
+
     def create_client_graph():
         inputs = [Input((1,), "int32")]
         x = inputs[0]
@@ -207,13 +211,12 @@ def test_serverclient_intraprocess_streaming_graph():
 
     def create_server_graph():
         inputs = [Input((1,), "int32")]
-        outputs = inputs
+        outputs = [Square(shape=(1,), dtype="int32")(inputs[0])]
         return Model(inputs=inputs, outputs=outputs)
 
-    inputs = [
-        Tensor((1,), "int32", np.array([x], dtype=np.int32)) for x in [1, 2, 3]
-    ]
-    expected = inputs
+    tensor_of = lambda x: Tensor((1,), "int32", np.array([x], dtype=np.int32))
+    inputs = [tensor_of(x) for x in [1, 2, 3]]
+    expected = [tensor_of(x) for x in [1, 4, 9]]
     results = []
 
     model = create_client_graph()
