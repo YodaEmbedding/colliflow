@@ -1,9 +1,9 @@
 import asyncio
 import json
 from asyncio import StreamReader, StreamWriter
+from typing import Any
 
 from colliflow.model import Model
-from colliflow.tensors import JsonDict
 
 
 class Server:
@@ -43,8 +43,8 @@ async def _model_setup(model: Model, writer: StreamWriter):
         await _writejsonfixed(writer, response_dict)
 
 
-async def _writejsonfixed(writer: StreamWriter, d: JsonDict):
-    data = f"{json.dumps(d)}\n".encode()
+async def _writejsonfixed(writer: StreamWriter, obj: Any):
+    data = f"{json.dumps(obj)}\n".encode()
     length = len(data).to_bytes(4, byteorder="big")
     writer.write(length)
     writer.write(data)

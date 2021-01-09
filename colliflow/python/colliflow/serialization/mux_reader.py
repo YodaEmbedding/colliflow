@@ -1,4 +1,5 @@
 import socket
+from asyncio import IncompleteReadError
 from threading import Thread
 from typing import Any, Callable, List
 
@@ -37,7 +38,7 @@ def mux_read(
 def read_mux_packet(sock: socket.socket) -> MuxPacket:
     stream_id = _readint(sock)
     payload_size = _readint(sock)
-    payload = bytes(_readexactly(sock, payload_size))
+    payload = _readexactly(sock, payload_size)
     return MuxPacket(
         stream_id=stream_id, payload_size=payload_size, payload=payload
     )
@@ -46,7 +47,7 @@ def read_mux_packet(sock: socket.socket) -> MuxPacket:
 class TensorStreamDeserializer:
     def __init__(self, subject: Subject):
         self._subject = subject
-        self._buffer = bytearray(b"")
+        self._buffer = bytearray()
 
     def on_next(self, buf: bytes):
         self._buffer += buf
@@ -77,15 +78,15 @@ def _tensor_stream_deserializer(in_stream: rx.Observable) -> rx.Observable:
     return out_stream
 
 
-def _readexactly(sock: socket.socket, num_bytes: int):
+def _readexactly(sock: socket.socket, num_bytes: int) -> bytes:
     buf = bytearray(num_bytes)
     pos = 0
     while pos < num_bytes:
-        cr = sock.recv_into(memoryview(buf)[pos:])
-        if cr == 0:
-            raise EOFError
-        pos += cr
-    return buf
+        n = sock.recv_into(memoryview(buf)[pos:])
+        if n == 0:
+            raise IncompleteReadError(bytes(buf[:pos]), num_bytes)
+        pos += n
+    return bytes(buf)
 
 
 def _readint(sock: socket.socket, num_bytes: int = 4) -> int:
