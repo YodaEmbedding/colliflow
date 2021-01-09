@@ -1,5 +1,5 @@
 from time import sleep
-from typing import Any, Callable, List, Sequence
+from typing import Any, Callable, List
 
 import numpy as np
 import rx
@@ -7,17 +7,8 @@ from rx.subject import Subject
 
 from colliflow.model import Model
 from colliflow.modules import *
-from colliflow.serialization.mux_reader import (
-    mux_read,
-    read_mux_packet,
-    start_reader_thread,
-)
-from colliflow.serialization.mux_writer import (
-    MuxWriter,
-    MuxWriterController,
-    mux_write,
-    start_writer_thread,
-)
+from colliflow.serialization.mux_reader import read_mux_packet, start_reader
+from colliflow.serialization.mux_writer import start_writer
 from colliflow.tensors import Tensor
 from colliflow.typing import Dtype, Shape
 
@@ -230,24 +221,6 @@ def test_serverclient_graph():
     # from multiprocessing import Process
     # p = Process(target=...)
     raise NotImplementedError
-
-
-def start_writer(
-    inputs: Sequence[rx.Observable], write: Callable[[bytes], None]
-):
-    num_input_streams = len(inputs)
-    mux_writer = MuxWriter(num_input_streams)
-    controller = MuxWriterController(mux_writer)
-    mux_write(mux_writer, *inputs)
-    start_writer_thread(controller, write)
-
-
-def start_reader(
-    num_streams: int, read: Callable[[], Any]
-) -> List[rx.Observable]:
-    mux_packets = Subject()
-    start_reader_thread(mux_packets, read)
-    return mux_read(mux_packets, num_streams)
 
 
 # def test_complex_graph

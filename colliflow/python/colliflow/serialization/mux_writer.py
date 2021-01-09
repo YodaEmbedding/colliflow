@@ -1,7 +1,7 @@
 import threading
 from queue import Queue
 from threading import Thread
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 import rx
 import rx.operators as ops
@@ -120,6 +120,16 @@ class BufferNotifier:
     @property
     def size(self):
         return self._size
+
+
+def start_writer(
+    inputs: Sequence[rx.Observable], write: Callable[[bytes], None]
+):
+    num_input_streams = len(inputs)
+    mux_writer = MuxWriter(num_input_streams)
+    controller = MuxWriterController(mux_writer)
+    mux_write(mux_writer, *inputs)
+    start_writer_thread(controller, write)
 
 
 def start_writer_thread(

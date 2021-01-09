@@ -12,6 +12,14 @@ from .mux_packet import MuxPacket
 from .tensor_packet import TensorPacket
 
 
+def start_reader(
+    num_streams: int, read: Callable[[], Any]
+) -> List[rx.Observable]:
+    mux_packets = Subject()
+    start_reader_thread(mux_packets, read)
+    return mux_read(mux_packets, num_streams)
+
+
 def start_reader_thread(subject: Subject, read: Callable[[], Any]):
     def read_loop():
         while True:
