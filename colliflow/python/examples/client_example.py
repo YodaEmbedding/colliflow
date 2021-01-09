@@ -177,77 +177,6 @@ def model_client_server():
 
 
 def main():
-    print("\nSIMPLE MODEL CONSTRUCTION TEST")
-    model = simple_model()
-    print(model)
-
-    print("\nSIMPLE SYNCHRONOUS PREDICTION TEST")
-    preds = model(Tensor(shape=(224, 224, 3), dtype="uint8"))
-    print(preds)
-
-    print("\nSERIALIZE TEST")
-    model_config = model.serialize_dict()
-    pprint(model_config)
-    # pprint(json.loads(json.dumps(model_config)))
-
-    print("\nDESERIALIZE TEST")
-    model = model_from_config(model_config)
-    preds = model(Tensor(shape=(224, 224, 3), dtype="uint8"))
-    print(preds)
-
-    print("\nMODEL CLIENT/SERVER TEST")
-    model_client, model_server = model_client_server()
-    print(model_client)
-    print(model_server)
-
-    # print("\nCLIENT/SERVER EXECUTOR TEST")
-    # client_executor = Executor(model=model_client)
-    # server_executor = Executor(model=model_server)
-
-
-def main_rx():
-    frames = rx.interval(1).pipe(
-        ops.do_action(lambda x: print(f"\n{get_time():.1f}  Frame {x}\n")),
-        ops.map(lambda x: Tensor((224, 224, 3), "uint8")),
-        ops.publish(),
-    )
-    model = simple_model()
-    print(model)
-
-    # TODO type checks to ensure always plugging in  correct amount of (,)
-    preds = model(Tensor((224, 224, 3), "uint8"))
-    print(preds)
-
-    observables = model.to_rx(frames)
-    observable = observables[0]
-    observable.subscribe(lambda x: print(f"{get_time():.1f}  Result"))
-
-    frames.connect()
-    sleep(10)
-
-
-async def tcp_echo_client(message):
-    reader: StreamReader
-    writer: StreamWriter
-    reader, writer = await asyncio.open_connection(IP, PORT)
-
-    print(f"Send: {message!r}")
-    writer.write(message.encode())
-    await writer.drain()
-
-    print("Close the connection")
-    writer.close()
-    await writer.wait_closed()
-
-
-def main_tcp():
-    model = server_model()
-    model_config = model.serialize()
-    print(json.dumps(model.serialize_dict(), indent=2))
-    asyncio.run(tcp_echo_client(model_config))
-
-
-def main_tcp_redesign():
     def create_server_graph():
         inputs = [ServerTcpInput(shape=(None,), dtype="bytes")]
         x = inputs[0]
@@ -274,7 +203,4 @@ def main_tcp_redesign():
 
 
 if __name__ == "__main__":
-    # main()
-    # main_rx()
-    # main_tcp()
-    main_tcp_redesign()
+    main()
