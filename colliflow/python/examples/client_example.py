@@ -47,7 +47,7 @@ def simple_model():
         shape=(14, 14, 512),
         dtype="uint8",
     )(x)
-    x = ServerInferenceModel(  #
+    x = ServerInferenceModel(
         func=server_func,
         shape=(1000,),
         dtype="float32",
@@ -81,7 +81,7 @@ def server_model():
         shape=(14, 14, 512),
         dtype="uint8",
     )(x)
-    x = ServerInferenceModel(  #
+    x = ServerInferenceModel(
         func=server_func,
         shape=(1000,),
         dtype="float32",
@@ -135,7 +135,7 @@ def multi_branch_model():
     )(x)
     x = Postencoder()(x)
     x = Predecoder(shape=(14, 14, 512), dtype="uint8")(x)
-    x = ServerInferenceModel(  #
+    x = ServerInferenceModel(
         func=server_func,
         shape=(1000,),
         dtype="float32",
@@ -166,8 +166,10 @@ def model_client_server():
     inputs = [Input(shape=(None,), dtype="uint8")]
     x = inputs[0]
     x = Predecoder(shape=(14, 14, 512), dtype="uint8")(x)
-    x = ServerInferenceModel(  #
-        func=server_func, shape=(1000,), dtype="float32"
+    x = ServerInferenceModel(
+        func=server_func,
+        shape=(1000,),
+        dtype="float32",
     )(x)
     # x = TcpSender()(x)
     outputs = [x]
