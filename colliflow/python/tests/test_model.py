@@ -14,6 +14,8 @@ from colliflow.typing import Dtype, Shape
 
 from .mock.socket import LoopbackMockSocket
 
+WAIT_COLLECT = 0.01
+
 
 def test_run_empty_graph():
     def create_graph():
@@ -138,7 +140,8 @@ def test_serverclient_intraprocess_streaming_loopback_graph():
     model.setup_blocking()
     obs = model.to_rx(rx.from_iterable(inputs))
     obs[0].subscribe(lambda x: results.append(x))
-    sleep(0.3)
+
+    sleep(WAIT_COLLECT)
 
     assert results == expected
 
@@ -211,7 +214,7 @@ def test_serverclient_intraprocess_streaming_graph():
     obs = model.to_rx(rx.from_iterable(inputs))
     obs[0].subscribe(lambda x: results.append(x))
 
-    sleep(0.3)
+    sleep(WAIT_COLLECT)
 
     assert results == expected
 
