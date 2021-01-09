@@ -1,5 +1,7 @@
+import socket
+from multiprocessing import Process
 from time import sleep
-from typing import Any, Callable, List
+from typing import List
 
 import numpy as np
 import rx
@@ -7,14 +9,18 @@ from rx.subject import Subject
 
 from colliflow.model import Model
 from colliflow.modules import *
+from colliflow.network.connectors import ClientsideConnector
 from colliflow.serialization.mux_reader import read_mux_packet, start_reader
 from colliflow.serialization.mux_writer import start_writer
+from colliflow.server import Server
 from colliflow.tensors import Tensor
 from colliflow.typing import Dtype, Shape
 
 from .mock.socket import LoopbackMockSocket
 
 WAIT_COLLECT = 0.01
+WAIT_COLLECT_LONG = 0.1
+WAIT_CONNECTION = 0.01
 
 
 def test_run_empty_graph():
@@ -219,11 +225,86 @@ def test_serverclient_intraprocess_streaming_graph():
     assert results == expected
 
 
-def test_serverclient_graph():
-    # TODO automatically open new python process for "server"
-    # from multiprocessing import Process
-    # p = Process(target=...)
-    raise NotImplementedError
+def test_serverclient_interprocess_streaming_graph():
+    class InterprocessStreamingServer(ForwardAsyncModule):
+        def __init__(self, graph: Model):
+            super().__init__(
+                shape=graph._outputs[0].shape,
+                dtype=graph._outputs[0].dtype,
+            )
+            self.graph = graph
+            self.in_sock: socket.socket
+            self.out_sock: socket.socket
+
+            num_input_streams = len(self.graph._inputs)
+            self.inputs = [Subject() for _ in range(num_input_streams)]
+            self.outputs: List[rx.Observable]
+
+        def setup(self):
+            self._connect_server()
+            self._start_stream(in_sock=self.in_sock, out_sock=self.out_sock)
+
+        def forward(self, *inputs: rx.Observable) -> rx.Observable:
+            for obs, subject in zip(inputs, self.inputs):
+                obs.subscribe(subject)
+            return self.outputs[0]
+
+        def _start_stream(self, in_sock, out_sock):
+            num_output_streams = len(self.graph._outputs)
+            write = out_sock.sendall
+            read = lambda: read_mux_packet(in_sock)
+            start_writer(self.inputs, write)
+            self.outputs = start_reader(num_output_streams, read)
+
+        def _connect_server(self):
+            """Open connection to data stream input/output sockets."""
+            connector = ClientsideConnector(self.graph, "localhost", 5678)
+            self.in_sock, self.out_sock = connector.connect()
+
+    class Square(ForwardModule):
+        def forward(self, x: Tensor):
+            return Tensor(x.shape, x.dtype, x.data ** 2)
+
+        def inner_config(self):
+            return {
+                "shape": self.input_shapes[0],
+                "dtype": self.input_dtypes[0],
+            }
+
+    def create_client_graph():
+        inputs = [Input((1,), "int32")]
+        x = inputs[0]
+        x = InterprocessStreamingServer(graph=create_server_graph())(x)
+        outputs = [x]
+        return Model(inputs=inputs, outputs=outputs)
+
+    def create_server_graph():
+        inputs = [Input((1,), "int32")]
+        outputs = [Square(shape=(1,), dtype="int32")(inputs[0])]
+        return Model(inputs=inputs, outputs=outputs)
+
+    tensor_of = lambda x: Tensor((1,), "int32", np.array([x], dtype=np.int32))
+    inputs = [tensor_of(x) for x in [1, 2, 3]]
+    expected = [tensor_of(x) for x in [1, 4, 9]]
+    results = []
+
+    process = Process(target=run_local_server, daemon=True)
+    process.start()
+    sleep(WAIT_CONNECTION)
+
+    model = create_client_graph()
+    model.setup_blocking()
+    obs = model.to_rx(rx.from_iterable(inputs))
+    obs[0].subscribe(lambda x: results.append(x))
+
+    sleep(WAIT_COLLECT_LONG)
+
+    assert results == expected
+
+
+def run_local_server():
+    server = Server("localhost", 5678)
+    server.start()
 
 
 # def test_complex_graph
