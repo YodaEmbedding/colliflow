@@ -8,7 +8,10 @@ from rx.subject import Subject
 
 from colliflow.model import Model
 from colliflow.modules import *
-from colliflow.modules.tcp_server_subgraph import TcpServerSubgraph
+from colliflow.modules.tcp_server_subgraph import (
+    StreamingServerSubgraph,
+    TcpServerSubgraph,
+)
 from colliflow.serialization.mux_reader import read_mux_packet, start_reader
 from colliflow.serialization.mux_writer import start_writer
 from colliflow.server import Server
@@ -152,42 +155,16 @@ def test_serverclient_intraprocess_streaming_loopback_graph():
 
 
 def test_serverclient_intraprocess_streaming_graph():
-    class IntraprocessStreamingServer(ForwardAsyncModule):
-        def __init__(self, graph: Model):
-            super().__init__(
-                shape=graph._outputs[0].shape,
-                dtype=graph._outputs[0].dtype,
-            )
-            self.graph = graph
+    class IntraprocessStreamingServer(StreamingServerSubgraph):
+        def _connect_server(self):
             self.in_sock = LoopbackMockSocket()
             self.out_sock = LoopbackMockSocket()
 
-            num_input_streams = len(self.graph._inputs)
-            self.inputs = [Subject() for _ in range(num_input_streams)]
-            self.outputs: List[rx.Observable]
-
-        def setup(self):
-            self._start_server(in_sock=self.out_sock, out_sock=self.in_sock)
-            self._start_stream(in_sock=self.in_sock, out_sock=self.out_sock)
-
-        def forward(self, *inputs: rx.Observable) -> rx.Observable:
-            for obs, subject in zip(inputs, self.inputs):
-                obs.subscribe(subject)
-            return self.outputs[0]
-
-        def _start_stream(self, in_sock, out_sock):
-            num_output_streams = len(self.graph._outputs)
-            write = out_sock.sendall
-            read = lambda: read_mux_packet(in_sock)
-            start_writer(self.inputs, write)
-            self.outputs = start_reader(num_output_streams, read)
-
-        def _start_server(self, in_sock, out_sock):
             self.graph.setup_blocking()
 
             num_input_streams = len(self.graph._inputs)
-            write = out_sock.sendall
-            read = lambda: read_mux_packet(in_sock)
+            write = self.in_sock.sendall
+            read = lambda: read_mux_packet(self.out_sock)
 
             inputs = start_reader(num_input_streams, read)
             outputs = self.graph.to_rx(*inputs)

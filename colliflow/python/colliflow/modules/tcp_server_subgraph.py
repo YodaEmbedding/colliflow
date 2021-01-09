@@ -12,14 +12,13 @@ from colliflow.serialization.mux_writer import start_writer
 from .module import ForwardAsyncModule
 
 
-class TcpServerSubgraph(ForwardAsyncModule):
-    def __init__(self, addr: Tuple[str, int], graph: Model):
+class StreamingServerSubgraph(ForwardAsyncModule):
+    def __init__(self, graph: Model):
         super().__init__(
             shape=graph._outputs[0].shape,
             dtype=graph._outputs[0].dtype,
         )
 
-        self.addr = addr
         self.graph = graph
         self.in_sock: socket.socket
         self.out_sock: socket.socket
@@ -37,6 +36,9 @@ class TcpServerSubgraph(ForwardAsyncModule):
             obs.subscribe(subject)
         return self.outputs[0]
 
+    def _connect_server(self):
+        raise NotImplementedError
+
     def _start_stream(self):
         num_output_streams = len(self.graph._outputs)
         write = self.out_sock.sendall
@@ -44,13 +46,19 @@ class TcpServerSubgraph(ForwardAsyncModule):
         start_writer(self.inputs, write)
         self.outputs = start_reader(num_output_streams, read)
 
+
+class TcpServerSubgraph(StreamingServerSubgraph):
+    def __init__(self, addr: Tuple[str, int], graph: Model):
+        super().__init__(graph=graph)
+        self.addr = addr
+
     def _connect_server(self):
-        """Open connection to data stream input/output sockets."""
         host, port = self.addr
         connector = ClientsideConnector(self.graph, host, port)
         self.in_sock, self.out_sock = connector.connect()
 
 
 __all__ = [
+    "StreamingServerSubgraph",
     "TcpServerSubgraph",
 ]

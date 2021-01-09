@@ -18,6 +18,8 @@ WAIT_CONNECTION = 0.01
 
 
 class ClientsideConnector:
+    """Open connection to data stream input/output sockets."""
+
     def __init__(self, graph: Model, host: str, port: int):
         self._graph = graph
         self._host = host
