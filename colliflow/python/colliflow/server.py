@@ -40,14 +40,11 @@ async def _model_setup(model: Model, writer: StreamWriter):
     async for module_id, result in model.setup():
         response_dict = {"module_id": module_id, "result": result}
         print("sending", response_dict)
-        await _writejsonfixed(writer, response_dict)
+        await _writejson(writer, response_dict)
 
 
-async def _writejsonfixed(writer: StreamWriter, obj: Any):
-    data = f"{json.dumps(obj)}\n".encode()
-    length = len(data).to_bytes(4, byteorder="big")
-    writer.write(length)
-    writer.write(data)
+async def _writejson(writer: StreamWriter, obj: Any):
+    writer.write(f"{json.dumps(obj)}\n".encode())
     await writer.drain()
 
 

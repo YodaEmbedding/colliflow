@@ -56,7 +56,7 @@ class ClientTcpServerSubgraph(ForwardAsyncModule):
         comm_writer.write(line)
 
         for _ in range(len(self._graph.modules)):
-            response = comm_reader.readjsonfixed()
+            response = comm_reader.readjson()
             print(response)
             self._handle_setup_response(response)
 
