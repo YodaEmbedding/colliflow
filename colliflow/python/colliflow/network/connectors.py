@@ -10,9 +10,9 @@ import rx.operators as ops
 from rx.scheduler import NewThreadScheduler
 
 from colliflow.model import Model, _rx_to_async_iter
+from colliflow.network.sockstream import SocketStreamReader, SocketStreamWriter
 from colliflow.serialization.mux_reader import read_mux_packet, start_reader
 from colliflow.serialization.mux_writer import start_writer
-from colliflow.tcp import TcpSocketStreamReader, TcpSocketStreamWriter
 
 WAIT_CONNECTION = 0.01
 
@@ -26,8 +26,8 @@ class ClientsideConnector:
     def connect(self) -> Tuple[socket.socket, socket.socket]:
         comm_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         comm_sock.connect((self._host, self._port))
-        comm_reader = TcpSocketStreamReader(comm_sock)
-        comm_writer = TcpSocketStreamWriter(comm_sock)
+        comm_reader = SocketStreamReader(comm_sock)
+        comm_writer = SocketStreamWriter(comm_sock)
 
         comm_writer.writeline(self._graph.serialize().encode())
 

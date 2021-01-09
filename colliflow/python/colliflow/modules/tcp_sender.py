@@ -6,7 +6,7 @@ from rx import operators as ops
 from rx.scheduler import ThreadPoolScheduler
 from rx.subject import ReplaySubject
 
-from colliflow.tcp import TcpSocketStreamWriter, TcpTensorOutputStream
+from colliflow.tcp import SocketStreamWriter, TcpTensorOutputStream
 from colliflow.tensors import Tensor
 from colliflow.typing import JsonDict
 
@@ -32,7 +32,7 @@ class TcpSender(OutputAsyncModule):
         _rx_mux(*inputs).subscribe(self._writer)
 
     def _create_network_writer(self):
-        stream_writer = TcpSocketStreamWriter(self._sock)
+        stream_writer = SocketStreamWriter(self._sock)
         self._stream = TcpTensorOutputStream(stream_writer, self._num_streams)
         message_requests = rx.from_iterable(self._sender())
         message_requests.subscribe(self._send_message)

@@ -6,7 +6,7 @@ from rx import operators as ops
 from rx.scheduler import ThreadPoolScheduler
 from rx.subject import ReplaySubject
 
-from colliflow.tcp import TcpSocketStreamReader, TcpTensorInputStream
+from colliflow.tcp import SocketStreamReader, TcpTensorInputStream
 from colliflow.tensors import SymbolicTensor, TensorInfo
 from colliflow.typing import Dtype, JsonDict, Shape
 
@@ -49,7 +49,7 @@ class TcpReceiver(InputAsyncModule):
         return outputs[0]
 
     def _create_network_reader(self):
-        stream_reader = TcpSocketStreamReader(self._sock)
+        stream_reader = SocketStreamReader(self._sock)
         self._stream = TcpTensorInputStream(stream_reader, self._infos)
         self._network_reader = rx.from_iterable(self._reader()).pipe(
             ops.share(),

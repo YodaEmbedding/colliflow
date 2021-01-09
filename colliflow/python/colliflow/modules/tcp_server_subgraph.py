@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Optional, Tuple
 
 import rx
 
-from colliflow.tcp import TcpSocketStreamReader, TcpSocketStreamWriter
+from colliflow.tcp import SocketStreamReader, SocketStreamWriter
 from colliflow.tensors import TensorInfo
 from colliflow.typing import JsonDict
 
@@ -50,8 +50,8 @@ class ClientTcpServerSubgraph(ForwardAsyncModule):
     def forward(self, *inputs: rx.Observable) -> rx.Observable:
         comm_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         comm_sock.connect(self._addr)
-        comm_writer = TcpSocketStreamWriter(comm_sock)
-        comm_reader = TcpSocketStreamReader(comm_sock)
+        comm_writer = SocketStreamWriter(comm_sock)
+        comm_reader = SocketStreamReader(comm_sock)
         line = (self._graph.serialize() + "\n").encode()
         comm_writer.write(line)
 
