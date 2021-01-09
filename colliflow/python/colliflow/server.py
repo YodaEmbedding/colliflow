@@ -4,6 +4,7 @@ from asyncio import StreamReader, StreamWriter
 from typing import Any
 
 from colliflow.model import Model
+from colliflow.network.connectors import ServersideConnector
 
 
 class Server:
@@ -26,6 +27,11 @@ async def _client_handler(reader: StreamReader, writer: StreamWriter):
     print("New client...")
     ip, port = writer.get_extra_info("peername")
     print(f"Connected to {ip}:{port}")
+
+    connector = ServersideConnector(reader, writer)
+    await connector.connect()
+
+    return
 
     line = await reader.readline()
     model = Model.deserialize(line.decode())
