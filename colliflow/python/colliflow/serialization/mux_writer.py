@@ -153,6 +153,20 @@ def mux_write(writer: MuxWriter, *inputs: rx.Observable):
 
 
 def _rx_mux(*xss: rx.Observable) -> rx.Observable:
+    """Combines observables into single observable of indexed tuples.
+
+    ```
+    A:   --- A1 -------- A2 -- A3 ----------->
+    B:   -------- B1 ----------------- B3 --->
+                    [ rx_mux ]
+    out: --- A1 - B1 --- A2 -- A3 ---- B3 --->
+    ```
+
+    The output events are of type `tuple[int, AOut | BOut]`,
+    where the first item represents the stream index (A = 0, B = 1),
+    and the second item holds the data.
+    """
+
     def pair_index(i: int) -> Callable[[Any], Any]:
         def inner(x: Any) -> Tuple[int, Any]:
             return i, x
