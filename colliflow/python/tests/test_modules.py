@@ -85,14 +85,6 @@ def test_output_async_module():
     assert results == expected
 
 
-# TODO uhhhh shouldn't the rx async modules be passing around Tensors?
-
-
-# TODO:
-# test inheritance... just check the name
-# test TcpSender and TcpReceiver individually?
-# test full fleged graph RUNNING (not serialization)
-
-# TODO for ser/des, test input_nodes, output_nodes, etc
-# type conversion...? test incorrect types, too
-# test multithread
+# TODO test inheritance __init_subclass__ name property
+# TODO test multithread
+# TODO test incorrect types

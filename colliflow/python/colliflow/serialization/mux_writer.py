@@ -12,8 +12,6 @@ from .mux_packet import MuxPacket
 from .tensor_packet import TensorPacket
 
 
-# TODO Rename to Muxer? Since it doesn't really WRITE anything...
-# Though we could write stuff by merely adding a _write hook.
 class MuxWriter:
     """Mixes multiple streams into a single serialized byte stream.
 

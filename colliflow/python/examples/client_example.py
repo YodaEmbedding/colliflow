@@ -225,35 +225,6 @@ def main_rx():
     frames.connect()
     sleep(10)
 
-    # TODO custom Request(1) graph?
-    # When should "output" TCP node send Request(1) notification?
-    # When it (thinks) that the receiver has received all data.
-
-    # "Publish" makes everything a hot observable.
-    # I assume that when .onNext() is called on a Subject, it multicasts to all
-    # observers "immediately". If the observer is not ready, it probably pushes
-    # it into some buffer of the subscriber.
-
-    # TODO
-    # IndexedTensor
-    # buffer_size, drop=True, etc
-    # backpressure
-    # time slice scheduling
-    # scheduler messaging
-    # tcp messaging
-    # tcp client/server
-    # ordering: "tensor indexes" (e.g. tcp "enforces" order; udp order lost tensors)
-    # ...
-
-    # NOTE
-    # predictive early-dropping frames + scheduling matters for low-latency
-    # ...not really for high-throughput only, though
-
-    # TEST
-    # multicasting
-    # various architectures, fuzzy timings/delays
-    # verify computation completes, no deadlocks, ...
-
 
 async def tcp_echo_client(message):
     reader: StreamReader
@@ -263,9 +234,6 @@ async def tcp_echo_client(message):
     print(f"Send: {message!r}")
     writer.write(message.encode())
     await writer.drain()
-
-    # data = await reader.read(100)
-    # print(f'Received: {data.decode()!r}')
 
     print("Close the connection")
     writer.close()
@@ -310,24 +278,3 @@ if __name__ == "__main__":
     # main_rx()
     # main_tcp()
     main_tcp_redesign()
-
-
-# TODO flow of actual data...? ehhhh
-
-# TODO
-# Test entire model (with local TCP)
-
-# TODO
-# Communication protocol... does TcpSender handle it? Or does the actual
-# executor/context determine what to do? What's the purpose of TcpSender, then?
-#
-# Doesn't it make the API cleaner to let TcpSender handle certain details?
-#
-# But it also makes sense to have the "Executor" switch between models
-# (receiving/sending configs), sending stats/etc, and so on.
-# Perhaps TcpSender is then just some sort of interface that outputs "packets"
-# (or in this case, a data stream) that the graph executor itself then relays.
-
-# TODO
-# Should we have each "Module" node report estimated compute times?
-# That way, we can schedule better?
