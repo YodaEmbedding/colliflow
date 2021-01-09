@@ -39,7 +39,8 @@ class Tensor:
             raise ValueError("Please ensure shape and dtype are correct.")
 
     def __repr__(self) -> str:
-        return f"Tensor(shape={self.shape}, dtype={self.dtype})"
+        data = self.data
+        return f"Tensor(shape={self.shape}, dtype={self.dtype}, data={data})"
 
     def __eq__(self, other: "Tensor"):
         def is_none_shape(x):
