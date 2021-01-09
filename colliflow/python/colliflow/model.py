@@ -358,7 +358,7 @@ def _output_visiting_order(
 async def _rx_to_async_iter(
     observable: rx.Observable,
     loop: Optional[AbstractEventLoop] = None,
-) -> AsyncIterator[Tuple[int, Any]]:
+) -> AsyncIterator[Any]:
     queue: asyncio.Queue[Notification] = asyncio.Queue()
     if loop is None:
         loop = asyncio.get_event_loop()
