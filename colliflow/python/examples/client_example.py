@@ -1,12 +1,7 @@
-import asyncio
-import json
 import random
-from asyncio import StreamReader, StreamWriter
-from pprint import pprint
-from time import sleep, time
+from time import time
 
 import rx
-from rx import operators as ops
 from rx.scheduler import NewThreadScheduler
 
 from colliflow import Input, Model, Module, SymbolicTensor, Tensor, TensorInfo
@@ -159,7 +154,6 @@ def model_client_server():
         func=client_func, shape=(14, 14, 512), dtype="uint8"
     )(x)
     x = Postencoder()(x)
-    # x = TcpSender()(x)
     outputs = [x]
     model_client = Model(inputs=inputs, outputs=outputs)
 
@@ -171,7 +165,6 @@ def model_client_server():
         shape=(1000,),
         dtype="float32",
     )(x)
-    # x = TcpSender()(x)
     outputs = [x]
     model_server = Model(inputs=inputs, outputs=outputs)
 
@@ -180,18 +173,15 @@ def model_client_server():
 
 def main():
     def create_server_graph():
-        inputs = [ServerTcpInput(shape=(None,), dtype="bytes")]
+        inputs = [Input(shape=(None,), dtype="bytes")]
         x = inputs[0]
-        # x = ServerTcpOutput(num_streams=len(inputs), sock=None)(x)
-        stream_infos = [TensorInfo(x.shape, x.dtype)]
-        x = ServerTcpOutput(num_streams=len(inputs), sock=None)(x)
         outputs = [x]
         return Model(inputs=inputs, outputs=outputs)
 
     def create_client_graph():
         inputs = [Input(shape=(None,), dtype="bytes")]
         x = inputs[0]
-        x = ClientTcpServerSubgraph(
+        x = ServerSubgraph(
             addr=("localhost", 5678),
             graph=create_server_graph(),
         )(x)

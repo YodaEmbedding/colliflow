@@ -76,19 +76,6 @@ class Predecoder(Module):
         return tensor
 
 
-class TcpClient(Module):
-    def __init__(self, hostname=None, port=None, **kwargs):
-        super().__init__((None,), "uint8", **kwargs)
-        self.hostname = hostname
-        self.port = port
-
-    def inner_config(self):
-        return {}
-
-    def forward(self, tensor: Tensor):
-        return tensor
-
-
 def FakeInput(shape: Tuple[int], dtype: str):  # pylint: disable=invalid-name
     return FakeInputLayer(shape, dtype)()
 

@@ -1,9 +1,6 @@
 import asyncio
-import json
 from asyncio import StreamReader, StreamWriter
-from typing import Any
 
-from colliflow.model import Model
 from colliflow.network.connectors import ServersideConnector
 
 
@@ -30,28 +27,6 @@ async def _client_handler(reader: StreamReader, writer: StreamWriter):
 
     connector = ServersideConnector(reader, writer)
     await connector.connect()
-
-    return
-
-    line = await reader.readline()
-    model = Model.deserialize(line.decode())
-    print(model)
-    await _model_setup(model, writer)
-    print("model.setup() complete!")
-    model.to_rx([])
-    print("model.to_rx() complete!")
-
-
-async def _model_setup(model: Model, writer: StreamWriter):
-    async for module_id, result in model.setup():
-        response_dict = {"module_id": module_id, "result": result}
-        print("sending", response_dict)
-        await _writejson(writer, response_dict)
-
-
-async def _writejson(writer: StreamWriter, obj: Any):
-    writer.write(f"{json.dumps(obj)}\n".encode())
-    await writer.drain()
 
 
 __all__ = [
