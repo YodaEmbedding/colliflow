@@ -13,8 +13,6 @@ class InputModule(ForwardModule):
 
     def __init__(self, shape: Shape, dtype: Dtype):
         super().__init__(shape, dtype)
-        self.input_shapes = [shape]
-        self.input_dtypes = [dtype]
 
     def inner_config(self):
         return {"shape": self.input_shapes[0], "dtype": self.input_dtypes[0]}
