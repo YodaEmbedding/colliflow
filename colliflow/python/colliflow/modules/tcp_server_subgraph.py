@@ -30,17 +30,17 @@ class TcpServerSubgraph(ForwardAsyncModule):
 
     def setup(self):
         self._connect_server()
-        self._start_stream(in_sock=self.in_sock, out_sock=self.out_sock)
+        self._start_stream()
 
     def forward(self, *inputs: rx.Observable) -> rx.Observable:
         for obs, subject in zip(inputs, self.inputs):
             obs.subscribe(subject)
         return self.outputs[0]
 
-    def _start_stream(self, in_sock, out_sock):
+    def _start_stream(self):
         num_output_streams = len(self.graph._outputs)
-        write = out_sock.sendall
-        read = lambda: read_mux_packet(in_sock)
+        write = self.out_sock.sendall
+        read = lambda: read_mux_packet(self.in_sock)
         start_writer(self.inputs, write)
         self.outputs = start_reader(num_output_streams, read)
 
