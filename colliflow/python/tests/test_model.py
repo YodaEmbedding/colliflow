@@ -238,7 +238,10 @@ def test_serverclient_interprocess_streaming_graph():
     def create_client_graph():
         inputs = [Input((1,), "int32")]
         x = inputs[0]
-        x = TcpServerSubgraph(graph=create_server_graph())(x)
+        x = TcpServerSubgraph(
+            addr=("localhost", 5678),
+            graph=create_server_graph(),
+        )(x)
         outputs = [x]
         return Model(inputs=inputs, outputs=outputs)
 

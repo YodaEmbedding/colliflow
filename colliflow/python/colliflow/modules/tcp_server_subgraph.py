@@ -1,5 +1,5 @@
 import socket
-from typing import List
+from typing import List, Tuple
 
 import rx
 from rx.subject import Subject
@@ -13,11 +13,13 @@ from .module import ForwardAsyncModule
 
 
 class TcpServerSubgraph(ForwardAsyncModule):
-    def __init__(self, graph: Model):
+    def __init__(self, addr: Tuple[str, int], graph: Model):
         super().__init__(
             shape=graph._outputs[0].shape,
             dtype=graph._outputs[0].dtype,
         )
+
+        self.addr = addr
         self.graph = graph
         self.in_sock: socket.socket
         self.out_sock: socket.socket
@@ -44,7 +46,8 @@ class TcpServerSubgraph(ForwardAsyncModule):
 
     def _connect_server(self):
         """Open connection to data stream input/output sockets."""
-        connector = ClientsideConnector(self.graph, "localhost", 5678)
+        host, port = self.addr
+        connector = ClientsideConnector(self.graph, host, port)
         self.in_sock, self.out_sock = connector.connect()
 
 
