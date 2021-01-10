@@ -232,9 +232,7 @@ def test_serverclient_interprocess_streaming_graph():
     expected = [tensor_of(x) for x in [1, 4, 9]]
     results = []
 
-    process = Process(target=run_local_server, daemon=True)
-    process.start()
-    sleep(WAIT_CONNECTION)
+    start_local_server()
 
     model = create_client_graph()
     model.setup_blocking()
@@ -246,9 +244,14 @@ def test_serverclient_interprocess_streaming_graph():
     assert results == expected
 
 
-def run_local_server():
-    server = Server("localhost", 5678)
-    server.start()
+def start_local_server():
+    def run_local_server():
+        server = Server("localhost", 5678)
+        server.start()
+
+    process = Process(target=run_local_server, daemon=True)
+    process.start()
+    sleep(WAIT_CONNECTION)
 
 
 # TODO def test_complex_graph
